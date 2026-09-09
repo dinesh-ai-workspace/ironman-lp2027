@@ -494,12 +494,22 @@ ipcMain.handle('stats:readiness-score', () => {
   const sleepRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(yesterday) || {}
   // Fatigue/soreness = TODAY's morning check-in
   const wellnessRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
-  // Nutrition = TODAY's calories logged so far
+  // Nutrition = most recent day with data (yesterday preferred; fall back to today)
   const targets = db.prepare('SELECT * FROM nutrition_targets ORDER BY id DESC LIMIT 1').get() || {}
-  const nut = db.prepare('SELECT SUM(calories) AS cal FROM nutrition_logs WHERE date = ?').get(today) || {}
-  // Today's logged sessions (training load context)
+  const CAL_TARGET = targets.calories || 2000
+  const PROTEIN_TARGET = targets.protein_g || 120
+  const nutRow = db.prepare(`
+    SELECT date, SUM(calories) AS cal, SUM(protein_g) AS protein
+    FROM nutrition_logs
+    WHERE date IN (?, ?)
+    GROUP BY date
+    ORDER BY date DESC
+    LIMIT 1
+  `).get(today, yesterday) || {}
+  const nutDate = nutRow.date || null
+  // Today's logged sessions (training load context) — rpe only, no zone col in logged_sessions
   const todaySessions = db.prepare(
-    'SELECT discipline, duration, rpe, target_intensity_zone FROM logged_sessions WHERE date = ?'
+    'SELECT discipline, duration, rpe FROM logged_sessions WHERE date = ?'
   ).all(today)
 
   // ── Sleep component — 40 pts (yesterday's data) ───────────────────────
@@ -539,8 +549,7 @@ ipcMain.handle('stats:readiness-score', () => {
   if (todaySessions.length > 0) {
     const totalMin = todaySessions.reduce((s, r) => s + (r.duration || 0), 0)
     const maxRpe = Math.max(...todaySessions.map(r => r.rpe || 0))
-    const maxZone = Math.max(...todaySessions.map(r => r.target_intensity_zone || 0))
-    const isHard = maxRpe >= 7 || maxZone >= 4
+    const isHard = maxRpe >= 7
     if (isHard && totalMin > 30) {
       loadPenalty = Math.min(Math.round(totalMin / 10), 10)
       loadNote = `${totalMin}min of hard training already logged today (−${loadPenalty}pts)`
@@ -551,22 +560,35 @@ ipcMain.handle('stats:readiness-score', () => {
   if (loadPenalty > 0) wellnessGaps.push(loadNote)
   wellnessPts = Math.max(0, wellnessPts - loadPenalty)
 
-  // ── Nutrition component — 20 pts (TODAY's calories so far) ───────────
-  let nutritionPts = 10  // neutral when no target set
+  // ── Nutrition component — 20 pts (10 calories + 10 protein) ─────────
+  // Uses most recent logged date (yesterday or today)
+  let nutritionPts = 10  // neutral when no data
   const nutritionGaps = []
+  const nutDateLabel = nutDate === yesterday ? 'yesterday' : nutDate === today ? 'today' : null
 
-  if (!targets.calories) {
-    nutritionGaps.push('No calorie target set — add one in Nutrition → Targets')
-  } else if (nut.cal == null) {
-    nutritionGaps.push('No meals logged today yet — log breakfast to start tracking')
+  if (!nutDate) {
+    nutritionGaps.push('No meals logged — import MFP or add manually in Nutrition tab')
   } else {
-    const pct = Math.min(nut.cal / targets.calories, 1)
-    nutritionPts = pct * 20
-    if (pct < 1) {
+    const cal = nutRow.cal || 0
+    const protein = nutRow.protein || 0
+
+    // Calories: 10 pts, target ≥ 2000 kcal
+    const calPts = Math.min(cal / CAL_TARGET, 1) * 10
+    if (cal < CAL_TARGET) {
       nutritionGaps.push(
-        `${Math.round(nut.cal)} kcal so far today (${Math.round(pct * 100)}% of ${targets.calories} target)`
+        `${Math.round(cal)} kcal ${nutDateLabel} — target ≥${CAL_TARGET} kcal (${Math.round(cal / CAL_TARGET * 100)}%)`
       )
     }
+
+    // Protein: 10 pts, target ≥ 120g
+    const proteinPts = Math.min(protein / PROTEIN_TARGET, 1) * 10
+    if (protein < PROTEIN_TARGET) {
+      nutritionGaps.push(
+        `${Math.round(protein)}g protein ${nutDateLabel} — target ≥${PROTEIN_TARGET}g (${Math.round(protein / PROTEIN_TARGET * 100)}%)`
+      )
+    }
+
+    nutritionPts = calPts + proteinPts
   }
 
   const score = Math.round(sleepPts + wellnessPts + nutritionPts)
@@ -576,7 +598,7 @@ ipcMain.handle('stats:readiness-score', () => {
   const primaryIssues = [
     wellnessGaps.find(g => g.includes('Fatigue')),
     sleepGaps.find(g => g.includes('slept')),
-    nutritionGaps.find(g => g.includes('kcal')),
+    nutritionGaps.find(g => g.includes('kcal') || g.includes('protein')),
   ].filter(Boolean)
 
   let advice
@@ -630,13 +652,19 @@ ipcMain.handle('stats:readiness-score', () => {
 
   const nutritionGain = 20 - Math.round(nutritionPts)
   if (nutritionGain > 0) {
-    if (!targets.calories) {
-      tips.push({ text: 'Set your daily calorie target', gain: nutritionGain, where: 'Nutrition → Targets' })
-    } else if (nut.cal == null) {
-      tips.push({ text: 'Log today\'s meals to track fuelling', gain: nutritionGain, where: 'Nutrition tab' })
+    if (!nutDate) {
+      tips.push({ text: 'Log meals in the Nutrition tab or import MFP', gain: nutritionGain, where: 'Nutrition tab' })
     } else {
-      const missing = targets.calories - Math.round(nut.cal || 0)
-      tips.push({ text: `Eat ${missing} more kcal today to hit your ${targets.calories} kcal target`, gain: nutritionGain, where: null })
+      const cal = nutRow.cal || 0
+      const protein = nutRow.protein || 0
+      if (cal < CAL_TARGET) {
+        const g = Math.round((1 - Math.min(cal / CAL_TARGET, 1)) * 10)
+        if (g > 0) tips.push({ text: `Eat ${Math.round(CAL_TARGET - cal)} more kcal today (${Math.round(cal)} of ${CAL_TARGET} target)`, gain: g, where: null })
+      }
+      if (protein < PROTEIN_TARGET) {
+        const g = Math.round((1 - Math.min(protein / PROTEIN_TARGET, 1)) * 10)
+        if (g > 0) tips.push({ text: `Add ${Math.round(PROTEIN_TARGET - protein)}g more protein today (${Math.round(protein)}g of ${PROTEIN_TARGET}g target)`, gain: g, where: null })
+      }
     }
   }
 
@@ -646,7 +674,7 @@ ipcMain.handle('stats:readiness-score', () => {
     score,
     tier,
     advice,
-    hasData: sleepHasData || wellnessHasData || nut.cal != null,
+    hasData: sleepHasData || wellnessHasData || !!nutDate,
     todaySessionsLogged: todaySessions.length,
     todayLoadNote: loadNote,
     breakdown: {
