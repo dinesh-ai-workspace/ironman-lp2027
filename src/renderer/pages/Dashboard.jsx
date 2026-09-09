@@ -105,7 +105,7 @@ function NutritionBar({ nutrition }) {
 }
 
 function ReadinessScoreCard({ readiness }) {
-  const { score, tier, advice, breakdown, tips, todayLoadNote } = readiness
+  const { score, tier, advice, breakdown, tips, todayLoadNote, garmin } = readiness
   const color = TIER_COLOR[tier]
   const hasTips = tips && tips.length > 0 && score < 100
 
@@ -128,6 +128,25 @@ function ReadinessScoreCard({ readiness }) {
             </span>
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{advice}</div>
+          {garmin && (garmin.bodyBattery != null || garmin.hrv != null) && (
+            <div style={{ display: 'flex', gap: '12px', marginTop: '6px' }}>
+              {garmin.bodyBattery != null && (
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  Body Battery <span style={{ fontWeight: 600, color: 'var(--accent-blue)' }}>{garmin.bodyBattery}</span>
+                </span>
+              )}
+              {garmin.hrv != null && (
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  HRV <span style={{ fontWeight: 600, color: 'var(--accent-blue)' }}>{garmin.hrv}ms</span>
+                </span>
+              )}
+              {garmin.rhr != null && (
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  RHR <span style={{ fontWeight: 600, color: 'var(--accent-blue)' }}>{garmin.rhr}bpm</span>
+                </span>
+              )}
+            </div>
+          )}
           {todayLoadNote && (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
               🏃 {todayLoadNote}

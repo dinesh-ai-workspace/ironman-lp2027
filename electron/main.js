@@ -492,8 +492,31 @@ ipcMain.handle('stats:readiness-score', () => {
 
   // Sleep = YESTERDAY's entry (last night's sleep logged this morning)
   const sleepRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(yesterday) || {}
-  // Fatigue/soreness = TODAY's morning check-in
+  // Fatigue/soreness = TODAY's morning check-in (manual override)
+  // Body Battery and HRV are parsed from Garmin sleep notes on yesterday's row
   const wellnessRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
+
+  // Parse Body Battery + HRV from Garmin sleep notes (format: "... | Body Battery: 54 | HRV: 38 | ...")
+  function parseNotes(notes) {
+    if (!notes) return {}
+    const bb = notes.match(/Body Battery:\s*(\d+)/)
+    const hrv = notes.match(/HRV:\s*(\d+)/)
+    const rhr = notes.match(/RHR:\s*(\d+)/)
+    return {
+      bodyBattery: bb ? parseInt(bb[1]) : null,
+      hrv: hrv ? parseInt(hrv[1]) : null,
+      rhr: rhr ? parseInt(rhr[1]) : null,
+    }
+  }
+  // Body Battery maps to fatigue: 80-100=1, 60-79=2, 40-59=3, 20-39=4, 0-19=5
+  function bbToFatigue(bb) {
+    if (bb >= 80) return 1
+    if (bb >= 60) return 2
+    if (bb >= 40) return 3
+    if (bb >= 20) return 4
+    return 5
+  }
+  const garmin = parseNotes(sleepRow.notes)  // yesterday's Garmin data
   // Nutrition = most recent day with data (yesterday preferred; fall back to today)
   const targets = db.prepare('SELECT * FROM nutrition_targets ORDER BY id DESC LIMIT 1').get() || {}
   // Calorie sweet spot: 1800–2000 kcal. Points deducted below 1800 AND above 2000.
@@ -529,20 +552,49 @@ ipcMain.handle('stats:readiness-score', () => {
     if (quality < 5) sleepGaps.push(`Sleep quality ${quality}/5 — aim for 5/5`)
   }
 
-  // ── Wellness component — 40 pts (today's fatigue + soreness) ─────────
-  // Apply training load penalty if hard sessions already logged today
-  const wellnessHasData = wellnessRow.fatigue_1_5 != null || wellnessRow.soreness_1_5 != null
+  // ── Wellness component — 40 pts (fatigue 20pts + soreness 20pts) ─────
+  // Fatigue: use manual entry if logged today, else derive from Body Battery (Garmin)
+  // Soreness: manual only (Garmin can't measure muscle soreness)
   let wellnessPts = 20  // neutral when no data
   const wellnessGaps = []
 
-  if (!wellnessHasData) {
-    wellnessGaps.push('No fatigue/soreness logged today — enter morning check-in in Wellness tab')
+  // Fatigue source: manual today > Garmin Body Battery yesterday > neutral
+  let fat, fatSource
+  if (wellnessRow.fatigue_1_5 != null) {
+    fat = wellnessRow.fatigue_1_5
+    fatSource = 'manual'
+  } else if (garmin.bodyBattery != null) {
+    fat = bbToFatigue(garmin.bodyBattery)
+    fatSource = `Body Battery ${garmin.bodyBattery}`
   } else {
-    const fat = wellnessRow.fatigue_1_5 || 3
-    const sor = wellnessRow.soreness_1_5 || 3
-    wellnessPts = ((6 - fat) / 4) * 20 + ((6 - sor) / 4) * 20
-    if (fat > 1) wellnessGaps.push(`Fatigue ${fat}/5 — aim for 1/5 (rest or easy session)`)
-    if (sor > 1) wellnessGaps.push(`Soreness ${sor}/5 — aim for 1/5 (stretch, foam roll)`)
+    fat = null
+    fatSource = null
+  }
+
+  // Soreness: manual only
+  const sor = wellnessRow.soreness_1_5 || null
+
+  if (fat == null && sor == null) {
+    wellnessGaps.push('No recovery data — import Garmin sleep or log soreness in Wellness tab')
+    // wellnessPts stays at neutral 20
+  } else {
+    const fatPts = fat != null ? ((6 - fat) / 4) * 20 : 10  // neutral if missing
+    const sorPts = sor != null ? ((6 - sor) / 4) * 20 : 10  // neutral if missing
+    wellnessPts = fatPts + sorPts
+
+    if (fat != null) {
+      const label = fatSource !== 'manual' ? ` (from ${fatSource})` : ''
+      if (fat > 1) wellnessGaps.push(`Fatigue ${fat}/5${label} — aim for 1/5`)
+      else wellnessGaps.push(`Fatigue 1/5${label} ✓`)
+    } else {
+      wellnessGaps.push('Log fatigue manually in Wellness tab (no Garmin data)')
+    }
+    if (sor != null) {
+      if (sor > 1) wellnessGaps.push(`Soreness ${sor}/5 — aim for 1/5 (stretch, foam roll)`)
+      else wellnessGaps.push('Soreness 1/5 ✓')
+    } else {
+      wellnessGaps.push('Soreness not logged — enter in Wellness tab')
+    }
   }
 
   // Training load modifier: high-intensity sessions already done today reduce wellness pts
@@ -650,19 +702,18 @@ ipcMain.handle('stats:readiness-score', () => {
 
   const wellnessGain = 40 - Math.round(wellnessPts) + loadPenalty
   if (wellnessGain > 0) {
-    if (!wellnessHasData) {
-      tips.push({ text: 'Log today\'s fatigue & soreness in the Wellness tab', gain: wellnessGain, where: 'Wellness tab' })
-    } else {
-      const fat = wellnessRow.fatigue_1_5 || 3
-      const sor = wellnessRow.soreness_1_5 || 3
-      if (fat > 1) {
-        const g = Math.round(((fat - 1) / 4) * 20)
-        tips.push({ text: `Reduce fatigue to 1/5 via rest or easy aerobic (currently ${fat}/5)`, gain: g, where: null })
-      }
-      if (sor > 1) {
-        const g = Math.round(((sor - 1) / 4) * 20)
-        tips.push({ text: `Reduce soreness to 1/5 via stretching/foam rolling (currently ${sor}/5)`, gain: g, where: null })
-      }
+    if (fat != null && fat > 1) {
+      const g = Math.round(((fat - 1) / 4) * 20)
+      const src = fatSource !== 'manual' ? ` (${fatSource})` : ''
+      tips.push({ text: `Fatigue ${fat}/5${src} — rest or easy aerobic session to recover`, gain: g, where: null })
+    } else if (fat == null) {
+      tips.push({ text: 'Import Garmin sleep to auto-detect fatigue from Body Battery', gain: 10, where: 'Wellness tab' })
+    }
+    if (sor != null && sor > 1) {
+      const g = Math.round(((sor - 1) / 4) * 20)
+      tips.push({ text: `Soreness ${sor}/5 — stretch, foam roll, or contrast shower`, gain: g, where: null })
+    } else if (sor == null) {
+      tips.push({ text: 'Log soreness in Wellness tab (manual — Garmin can\'t measure this)', gain: 10, where: 'Wellness tab' })
     }
   }
 
@@ -694,7 +745,8 @@ ipcMain.handle('stats:readiness-score', () => {
     score,
     tier,
     advice,
-    hasData: sleepHasData || wellnessHasData || !!nutDate,
+    hasData: sleepHasData || fat != null || sor != null || !!nutDate,
+    garmin,
     todaySessionsLogged: todaySessions.length,
     todayLoadNote: loadNote,
     breakdown: {
