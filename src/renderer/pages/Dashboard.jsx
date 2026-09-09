@@ -177,7 +177,7 @@ function ReadinessScoreCard({ readiness }) {
         {/* Breakdown bars */}
         <div style={{ minWidth: '220px', flexShrink: 0 }}>
           <BreakdownBar label="Sleep" pts={breakdown.sleep.pts} max={breakdown.sleep.max} gaps={breakdown.sleep.gaps} />
-          <BreakdownBar label="Fatigue / Soreness" pts={breakdown.wellness.pts} max={breakdown.wellness.max} gaps={breakdown.wellness.gaps} />
+          <BreakdownBar label="Recovery (Body Battery)" pts={breakdown.wellness.pts} max={breakdown.wellness.max} gaps={breakdown.wellness.gaps} />
           <NutritionBar nutrition={breakdown.nutrition} />
         </div>
 
