@@ -68,7 +68,7 @@ function MiniBar({ pct, color }) {
 }
 
 function NutritionBar({ nutrition }) {
-  const { pts, max, calPts, proteinPts, calTarget, proteinTarget, nutDateLabel, gaps } = nutrition
+  const { pts, max, calPts, proteinPts, calSweet, calLow, proteinTarget, nutDateLabel, gaps } = nutrition
   const noData = !nutDateLabel
   return (
     <div style={{ marginBottom: '10px' }}>

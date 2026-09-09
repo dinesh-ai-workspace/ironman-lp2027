@@ -496,9 +496,10 @@ ipcMain.handle('stats:readiness-score', () => {
   const wellnessRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
   // Nutrition = most recent day with data (yesterday preferred; fall back to today)
   const targets = db.prepare('SELECT * FROM nutrition_targets ORDER BY id DESC LIMIT 1').get() || {}
-  // Ironman training defaults — override in Nutrition → Targets
-  const CAL_TARGET = targets.calories || 2800
-  const PROTEIN_TARGET = targets.protein_g || 140
+  // Calorie sweet spot: 1800–2000 kcal. Points deducted below 1800 AND above 2000.
+  const CAL_SWEET = targets.calories || 2000   // upper bound of sweet spot
+  const CAL_LOW   = CAL_SWEET - 200            // lower bound (1800 by default)
+  const PROTEIN_TARGET = targets.protein_g || 120
   const nutRow = db.prepare(`
     SELECT date, SUM(calories) AS cal, SUM(protein_g) AS protein
     FROM nutrition_logs
@@ -574,13 +575,26 @@ ipcMain.handle('stats:readiness-score', () => {
     const cal = nutRow.cal || 0
     const protein = nutRow.protein || 0
 
-    // Calories: 10 pts, target ≥ CAL_TARGET
-    calPts = Math.min(cal / CAL_TARGET, 1) * 10
-    nutritionGaps.push(
-      cal >= CAL_TARGET
-        ? `Calories: ${Math.round(cal)} kcal ✓ (target ${CAL_TARGET} kcal)`
-        : `Calories: ${Math.round(cal)} kcal — ${Math.round(CAL_TARGET - cal)} short of ${CAL_TARGET} kcal target (${Math.round(cal / CAL_TARGET * 100)}%)`
-    )
+    // Calories: 10 pts — sweet spot is CAL_LOW–CAL_SWEET (1800–2000 kcal)
+    // Below CAL_LOW: ramp 0→10 as cal goes 0→CAL_LOW
+    // In sweet spot: full 10 pts
+    // Above CAL_SWEET: lose 1 pt per 200 kcal over
+    if (cal < CAL_LOW) {
+      calPts = (cal / CAL_LOW) * 10
+      nutritionGaps.push(
+        `Calories: ${Math.round(cal)} kcal — under-fuelled, target ${CAL_LOW}–${CAL_SWEET} kcal (${Math.round(cal / CAL_LOW * 100)}%)`
+      )
+    } else if (cal <= CAL_SWEET) {
+      calPts = 10
+      nutritionGaps.push(`Calories: ${Math.round(cal)} kcal ✓ (sweet spot ${CAL_LOW}–${CAL_SWEET} kcal)`)
+    } else {
+      const over = cal - CAL_SWEET
+      const penalty = Math.min(over / 200, 10)
+      calPts = Math.max(0, 10 - penalty)
+      nutritionGaps.push(
+        `Calories: ${Math.round(cal)} kcal — ${Math.round(over)} over target (aim for ≤${CAL_SWEET} kcal)`
+      )
+    }
 
     // Protein: 10 pts, target ≥ PROTEIN_TARGET
     proteinPts = Math.min(protein / PROTEIN_TARGET, 1) * 10
@@ -659,9 +673,13 @@ ipcMain.handle('stats:readiness-score', () => {
     } else {
       const cal = nutRow.cal || 0
       const protein = nutRow.protein || 0
-      if (cal < CAL_TARGET) {
-        const g = Math.round((1 - Math.min(cal / CAL_TARGET, 1)) * 10)
-        if (g > 0) tips.push({ text: `Eat ${Math.round(CAL_TARGET - cal)} more kcal today (${Math.round(cal)} of ${CAL_TARGET} target)`, gain: g, where: null })
+      if (cal < CAL_LOW) {
+        const g = Math.round((1 - cal / CAL_LOW) * 10)
+        if (g > 0) tips.push({ text: `Eat ${Math.round(CAL_LOW - cal)} more kcal to reach ${CAL_LOW} kcal minimum (currently ${Math.round(cal)} kcal)`, gain: g, where: null })
+      } else if (cal > CAL_SWEET) {
+        const over = cal - CAL_SWEET
+        const g = Math.round(Math.min(over / 200, 10))
+        if (g > 0) tips.push({ text: `${Math.round(over)} kcal over target — aim for ≤${CAL_SWEET} kcal tomorrow`, gain: g, where: null })
       }
       if (protein < PROTEIN_TARGET) {
         const g = Math.round((1 - Math.min(protein / PROTEIN_TARGET, 1)) * 10)
@@ -685,7 +703,7 @@ ipcMain.handle('stats:readiness-score', () => {
       nutrition: {
         pts: Math.round(nutritionPts), max: 20, gaps: nutritionGaps,
         calPts: Math.round(calPts), proteinPts: Math.round(proteinPts),
-        calTarget: CAL_TARGET, proteinTarget: PROTEIN_TARGET,
+        calSweet: CAL_SWEET, calLow: CAL_LOW, proteinTarget: PROTEIN_TARGET,
         nutDate, nutDateLabel,
       },
     },
