@@ -496,8 +496,9 @@ ipcMain.handle('stats:readiness-score', () => {
   const wellnessRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
   // Nutrition = most recent day with data (yesterday preferred; fall back to today)
   const targets = db.prepare('SELECT * FROM nutrition_targets ORDER BY id DESC LIMIT 1').get() || {}
-  const CAL_TARGET = targets.calories || 2000
-  const PROTEIN_TARGET = targets.protein_g || 120
+  // Ironman training defaults — override in Nutrition → Targets
+  const CAL_TARGET = targets.calories || 2800
+  const PROTEIN_TARGET = targets.protein_g || 140
   const nutRow = db.prepare(`
     SELECT date, SUM(calories) AS cal, SUM(protein_g) AS protein
     FROM nutrition_logs
@@ -566,27 +567,28 @@ ipcMain.handle('stats:readiness-score', () => {
   const nutritionGaps = []
   const nutDateLabel = nutDate === yesterday ? 'yesterday' : nutDate === today ? 'today' : null
 
+  let calPts = 0, proteinPts = 0
   if (!nutDate) {
     nutritionGaps.push('No meals logged — import MFP or add manually in Nutrition tab')
   } else {
     const cal = nutRow.cal || 0
     const protein = nutRow.protein || 0
 
-    // Calories: 10 pts, target ≥ 2000 kcal
-    const calPts = Math.min(cal / CAL_TARGET, 1) * 10
-    if (cal < CAL_TARGET) {
-      nutritionGaps.push(
-        `${Math.round(cal)} kcal ${nutDateLabel} — target ≥${CAL_TARGET} kcal (${Math.round(cal / CAL_TARGET * 100)}%)`
-      )
-    }
+    // Calories: 10 pts, target ≥ CAL_TARGET
+    calPts = Math.min(cal / CAL_TARGET, 1) * 10
+    nutritionGaps.push(
+      cal >= CAL_TARGET
+        ? `Calories: ${Math.round(cal)} kcal ✓ (target ${CAL_TARGET} kcal)`
+        : `Calories: ${Math.round(cal)} kcal — ${Math.round(CAL_TARGET - cal)} short of ${CAL_TARGET} kcal target (${Math.round(cal / CAL_TARGET * 100)}%)`
+    )
 
-    // Protein: 10 pts, target ≥ 120g
-    const proteinPts = Math.min(protein / PROTEIN_TARGET, 1) * 10
-    if (protein < PROTEIN_TARGET) {
-      nutritionGaps.push(
-        `${Math.round(protein)}g protein ${nutDateLabel} — target ≥${PROTEIN_TARGET}g (${Math.round(protein / PROTEIN_TARGET * 100)}%)`
-      )
-    }
+    // Protein: 10 pts, target ≥ PROTEIN_TARGET
+    proteinPts = Math.min(protein / PROTEIN_TARGET, 1) * 10
+    nutritionGaps.push(
+      protein >= PROTEIN_TARGET
+        ? `Protein: ${Math.round(protein)}g ✓ (target ${PROTEIN_TARGET}g)`
+        : `Protein: ${Math.round(protein)}g — ${Math.round(PROTEIN_TARGET - protein)}g short of ${PROTEIN_TARGET}g target (${Math.round(protein / PROTEIN_TARGET * 100)}%)`
+    )
 
     nutritionPts = calPts + proteinPts
   }
@@ -680,7 +682,12 @@ ipcMain.handle('stats:readiness-score', () => {
     breakdown: {
       sleep:     { pts: Math.round(sleepPts),     max: 40, gaps: sleepGaps },
       wellness:  { pts: Math.round(wellnessPts),  max: 40, gaps: wellnessGaps },
-      nutrition: { pts: Math.round(nutritionPts), max: 20, gaps: nutritionGaps },
+      nutrition: {
+        pts: Math.round(nutritionPts), max: 20, gaps: nutritionGaps,
+        calPts: Math.round(calPts), proteinPts: Math.round(proteinPts),
+        calTarget: CAL_TARGET, proteinTarget: PROTEIN_TARGET,
+        nutDate, nutDateLabel,
+      },
     },
     tips,
   }

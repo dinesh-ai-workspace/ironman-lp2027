@@ -59,6 +59,51 @@ function BreakdownBar({ label, pts, max, gaps = [] }) {
   )
 }
 
+function MiniBar({ pct, color }) {
+  return (
+    <div style={{ height: '4px', borderRadius: '2px', background: 'var(--border)', marginBottom: '2px' }}>
+      <div style={{ height: '100%', borderRadius: '2px', width: `${Math.round(pct * 100)}%`, background: color, transition: 'width 0.4s' }} />
+    </div>
+  )
+}
+
+function NutritionBar({ nutrition }) {
+  const { pts, max, calPts, proteinPts, calTarget, proteinTarget, nutDateLabel, gaps } = nutrition
+  const noData = !nutDateLabel
+  return (
+    <div style={{ marginBottom: '10px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px' }}>
+        <span>Nutrition {nutDateLabel ? <span style={{ opacity: 0.6 }}>({nutDateLabel})</span> : ''}</span>
+        <span style={{ color: pts >= max ? 'var(--accent-green)' : 'inherit' }}>{pts}/{max}</span>
+      </div>
+      {noData ? (
+        <div style={{ height: '4px', borderRadius: '2px', background: 'var(--border)' }} />
+      ) : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+            <span>Calories</span>
+            <span style={{ color: calPts >= 10 ? 'var(--accent-green)' : 'inherit' }}>{calPts}/10</span>
+          </div>
+          <MiniBar pct={calPts / 10} color={calPts >= 10 ? 'var(--accent-green)' : 'var(--accent-blue)'} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px', marginTop: '4px' }}>
+            <span>Protein</span>
+            <span style={{ color: proteinPts >= 10 ? 'var(--accent-green)' : 'inherit' }}>{proteinPts}/10</span>
+          </div>
+          <MiniBar pct={proteinPts / 10} color={proteinPts >= 10 ? 'var(--accent-green)' : '#fb923c'} />
+        </>
+      )}
+      {gaps && gaps.map((g, i) => (
+        <div key={i} style={{
+          fontSize: '10px', marginTop: '3px', display: 'flex', gap: '4px',
+          color: g.includes('✓') ? 'var(--accent-green)' : 'var(--accent-amber)',
+        }}>
+          <span style={{ flexShrink: 0 }}>↳</span><span>{g}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function ReadinessScoreCard({ readiness }) {
   const { score, tier, advice, breakdown, tips, todayLoadNote } = readiness
   const color = TIER_COLOR[tier]
@@ -111,10 +156,10 @@ function ReadinessScoreCard({ readiness }) {
         </div>
 
         {/* Breakdown bars */}
-        <div style={{ minWidth: '210px', flexShrink: 0 }}>
+        <div style={{ minWidth: '220px', flexShrink: 0 }}>
           <BreakdownBar label="Sleep" pts={breakdown.sleep.pts} max={breakdown.sleep.max} gaps={breakdown.sleep.gaps} />
           <BreakdownBar label="Fatigue / Soreness" pts={breakdown.wellness.pts} max={breakdown.wellness.max} gaps={breakdown.wellness.gaps} />
-          <BreakdownBar label="Nutrition" pts={breakdown.nutrition.pts} max={breakdown.nutrition.max} gaps={breakdown.nutrition.gaps} />
+          <NutritionBar nutrition={breakdown.nutrition} />
         </div>
 
       </div>
