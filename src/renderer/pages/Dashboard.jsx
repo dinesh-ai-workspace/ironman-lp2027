@@ -34,50 +34,89 @@ const TIER_COLOR = { green: 'var(--accent-green)', amber: 'var(--accent-amber)',
 const TIER_BG = { green: 'rgba(34,197,94,0.08)', amber: 'rgba(251,191,36,0.08)', red: 'rgba(248,113,113,0.08)' }
 const TIER_LABEL = { green: 'Good to go', amber: 'Moderate', red: 'Rest day' }
 
-function BreakdownBar({ label, pts, max }) {
+function BreakdownBar({ label, pts, max, gaps = [] }) {
   const pct = Math.round((pts / max) * 100)
+  const full = pts >= max
   return (
-    <div style={{ marginBottom: '8px' }}>
+    <div style={{ marginBottom: '10px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px' }}>
         <span>{label}</span>
-        <span>{pts}/{max}</span>
+        <span style={{ color: full ? 'var(--accent-green)' : 'inherit' }}>{pts}/{max}</span>
       </div>
       <div style={{ height: '4px', borderRadius: '2px', background: 'var(--border)' }}>
-        <div style={{ height: '100%', borderRadius: '2px', width: `${pct}%`, background: 'var(--accent-blue)', transition: 'width 0.4s' }} />
+        <div style={{
+          height: '100%', borderRadius: '2px', width: `${pct}%`,
+          background: full ? 'var(--accent-green)' : 'var(--accent-blue)',
+          transition: 'width 0.4s',
+        }} />
       </div>
+      {gaps.map((g, i) => (
+        <div key={i} style={{ fontSize: '10px', color: 'var(--accent-amber)', marginTop: '3px', display: 'flex', gap: '4px' }}>
+          <span style={{ flexShrink: 0 }}>↳</span><span>{g}</span>
+        </div>
+      ))}
     </div>
   )
 }
 
 function ReadinessScoreCard({ readiness }) {
-  const { score, tier, advice, hasData, breakdown } = readiness
+  const { score, tier, advice, breakdown, tips, todayLoadNote } = readiness
   const color = TIER_COLOR[tier]
+  const hasTips = tips && tips.length > 0 && score < 100
+
   return (
     <div className="card" style={{ marginBottom: '24px', borderColor: color, background: TIER_BG[tier] }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '12px' }}>
-        <div style={{ textAlign: 'center', minWidth: '64px' }}>
-          <div style={{ fontSize: '36px', fontWeight: 800, color, lineHeight: 1 }}>{score}</div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: '2px' }}>/ 100</div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '20px' }}>
+
+        {/* Score */}
+        <div style={{ textAlign: 'center', minWidth: '64px', paddingTop: '2px' }}>
+          <div style={{ fontSize: '40px', fontWeight: 800, color, lineHeight: 1 }}>{score}</div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: '2px' }}>/100</div>
         </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+
+        {/* Advice + tips */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
             <span style={{ fontSize: '14px', fontWeight: 700, color }}>Today's Readiness</span>
-            <span style={{ fontSize: '11px', background: color, color: '#0f172a', borderRadius: '4px', padding: '1px 6px', fontWeight: 600 }}>
+            <span style={{ fontSize: '11px', background: color, color: '#0f172a', borderRadius: '4px', padding: '1px 8px', fontWeight: 600 }}>
               {TIER_LABEL[tier]}
             </span>
           </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{advice}</div>
-          {!hasData && (
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{advice}</div>
+          {todayLoadNote && (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Log wellness &amp; sleep in the Wellness tab to improve accuracy.
+              🏃 {todayLoadNote}
+            </div>
+          )}
+
+          {hasTips && (
+            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>
+                How to reach 100
+              </div>
+              {tips.map((tip, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '5px' }}>
+                  <span style={{
+                    fontSize: '11px', fontWeight: 700, color: 'var(--accent-green)',
+                    minWidth: '44px', flexShrink: 0,
+                  }}>+{tip.gain}pts</span>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>{tip.text}</span>
+                  {tip.where && (
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>→ {tip.where}</span>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>
-        <div style={{ minWidth: '160px' }}>
-          <BreakdownBar label="Sleep" pts={breakdown.sleep} max={40} />
-          <BreakdownBar label="Fatigue / Soreness" pts={breakdown.wellness} max={40} />
-          <BreakdownBar label="Nutrition" pts={breakdown.nutrition} max={20} />
+
+        {/* Breakdown bars */}
+        <div style={{ minWidth: '210px', flexShrink: 0 }}>
+          <BreakdownBar label="Sleep" pts={breakdown.sleep.pts} max={breakdown.sleep.max} gaps={breakdown.sleep.gaps} />
+          <BreakdownBar label="Fatigue / Soreness" pts={breakdown.wellness.pts} max={breakdown.wellness.max} gaps={breakdown.wellness.gaps} />
+          <BreakdownBar label="Nutrition" pts={breakdown.nutrition.pts} max={breakdown.nutrition.max} gaps={breakdown.nutrition.gaps} />
         </div>
+
       </div>
     </div>
   )

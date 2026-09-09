@@ -490,69 +490,171 @@ ipcMain.handle('stats:readiness-score', () => {
   const today = new Date().toISOString().slice(0, 10)
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
 
-  const wellness = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
+  // Sleep = YESTERDAY's entry (last night's sleep logged this morning)
+  const sleepRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(yesterday) || {}
+  // Fatigue/soreness = TODAY's morning check-in
+  const wellnessRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
+  // Nutrition = TODAY's calories logged so far
   const targets = db.prepare('SELECT * FROM nutrition_targets ORDER BY id DESC LIMIT 1').get() || {}
-  const nut = db.prepare(`
-    SELECT SUM(calories) AS cal FROM nutrition_logs WHERE date = ?
-  `).get(yesterday) || {}
+  const nut = db.prepare('SELECT SUM(calories) AS cal FROM nutrition_logs WHERE date = ?').get(today) || {}
+  // Today's logged sessions (training load context)
+  const todaySessions = db.prepare(
+    'SELECT discipline, duration, rpe, target_intensity_zone FROM logged_sessions WHERE date = ?'
+  ).all(today)
 
-  // Sleep component — 40 pts
+  // ── Sleep component — 40 pts (yesterday's data) ───────────────────────
+  const sleepHasData = sleepRow.sleep_hours != null || sleepRow.sleep_quality_1_5 != null
   let sleepPts = 20  // neutral when no data
-  let sleepNote = null
-  if (wellness.sleep_hours != null || wellness.sleep_quality_1_5 != null) {
-    const hourScore = Math.min((wellness.sleep_hours || 0) / 8, 1) * 20
-    const qualScore = ((wellness.sleep_quality_1_5 || 3) / 5) * 20
-    sleepPts = hourScore + qualScore
-    if ((wellness.sleep_hours || 0) < 6) sleepNote = 'Short night'
-    else if ((wellness.sleep_quality_1_5 || 3) <= 2) sleepNote = 'Poor quality sleep'
+  const sleepGaps = []
+
+  if (!sleepHasData) {
+    sleepGaps.push(`No sleep logged for ${yesterday} — enter last night's sleep in Wellness tab`)
+  } else {
+    const hours = sleepRow.sleep_hours || 0
+    const quality = sleepRow.sleep_quality_1_5 || 3
+    sleepPts = Math.min(hours / 8, 1) * 20 + (quality / 5) * 20
+    if (hours < 8) sleepGaps.push(`${hours.toFixed(1)}h slept last night — target is 8h`)
+    if (quality < 5) sleepGaps.push(`Sleep quality ${quality}/5 — aim for 5/5`)
   }
 
-  // Wellness component — 40 pts (fatigue + soreness, 1=best 5=worst)
+  // ── Wellness component — 40 pts (today's fatigue + soreness) ─────────
+  // Apply training load penalty if hard sessions already logged today
+  const wellnessHasData = wellnessRow.fatigue_1_5 != null || wellnessRow.soreness_1_5 != null
   let wellnessPts = 20  // neutral when no data
-  let wellnessNote = null
-  if (wellness.fatigue_1_5 != null || wellness.soreness_1_5 != null) {
-    const fatScore = ((6 - (wellness.fatigue_1_5 || 3)) / 4) * 20
-    const sorScore = ((6 - (wellness.soreness_1_5 || 3)) / 4) * 20
-    wellnessPts = fatScore + sorScore
-    if ((wellness.fatigue_1_5 || 3) >= 4) wellnessNote = 'High fatigue'
-    else if ((wellness.soreness_1_5 || 3) >= 4) wellnessNote = 'Significant soreness'
+  const wellnessGaps = []
+
+  if (!wellnessHasData) {
+    wellnessGaps.push('No fatigue/soreness logged today — enter morning check-in in Wellness tab')
+  } else {
+    const fat = wellnessRow.fatigue_1_5 || 3
+    const sor = wellnessRow.soreness_1_5 || 3
+    wellnessPts = ((6 - fat) / 4) * 20 + ((6 - sor) / 4) * 20
+    if (fat > 1) wellnessGaps.push(`Fatigue ${fat}/5 — aim for 1/5 (rest or easy session)`)
+    if (sor > 1) wellnessGaps.push(`Soreness ${sor}/5 — aim for 1/5 (stretch, foam roll)`)
   }
 
-  // Nutrition component — 20 pts (yesterday's calories vs target)
+  // Training load modifier: high-intensity sessions already done today reduce wellness pts
+  let loadPenalty = 0
+  let loadNote = null
+  if (todaySessions.length > 0) {
+    const totalMin = todaySessions.reduce((s, r) => s + (r.duration || 0), 0)
+    const maxRpe = Math.max(...todaySessions.map(r => r.rpe || 0))
+    const maxZone = Math.max(...todaySessions.map(r => r.target_intensity_zone || 0))
+    const isHard = maxRpe >= 7 || maxZone >= 4
+    if (isHard && totalMin > 30) {
+      loadPenalty = Math.min(Math.round(totalMin / 10), 10)
+      loadNote = `${totalMin}min of hard training already logged today (−${loadPenalty}pts)`
+    } else if (totalMin > 0) {
+      loadNote = `${totalMin}min logged today`
+    }
+  }
+  if (loadPenalty > 0) wellnessGaps.push(loadNote)
+  wellnessPts = Math.max(0, wellnessPts - loadPenalty)
+
+  // ── Nutrition component — 20 pts (TODAY's calories so far) ───────────
   let nutritionPts = 10  // neutral when no target set
-  let nutritionNote = null
-  if (targets.calories && nut.cal != null) {
+  const nutritionGaps = []
+
+  if (!targets.calories) {
+    nutritionGaps.push('No calorie target set — add one in Nutrition → Targets')
+  } else if (nut.cal == null) {
+    nutritionGaps.push('No meals logged today yet — log breakfast to start tracking')
+  } else {
     const pct = Math.min(nut.cal / targets.calories, 1)
     nutritionPts = pct * 20
-    if (pct < 0.8) nutritionNote = 'Under-fuelled yesterday'
+    if (pct < 1) {
+      nutritionGaps.push(
+        `${Math.round(nut.cal)} kcal so far today (${Math.round(pct * 100)}% of ${targets.calories} target)`
+      )
+    }
   }
 
   const score = Math.round(sleepPts + wellnessPts + nutritionPts)
   const tier = score >= 75 ? 'green' : score >= 50 ? 'amber' : 'red'
 
-  const notes = [sleepNote, wellnessNote, nutritionNote].filter(Boolean)
+  // ── Advice ────────────────────────────────────────────────────────────
+  const primaryIssues = [
+    wellnessGaps.find(g => g.includes('Fatigue')),
+    sleepGaps.find(g => g.includes('slept')),
+    nutritionGaps.find(g => g.includes('kcal')),
+  ].filter(Boolean)
+
   let advice
   if (tier === 'green') {
     advice = 'Recovery is solid — execute today\'s session as planned.'
   } else if (tier === 'amber') {
-    const reason = notes.length ? notes[0] : 'Moderate fatigue'
+    const reason = primaryIssues[0] ? primaryIssues[0].split(' — ')[0] : 'Moderate fatigue'
     advice = `${reason} — reduce intensity by 10–15% on hard efforts.`
   } else {
     advice = 'Body needs recovery — consider swapping today\'s session for easy aerobic or rest.'
   }
 
-  const hasData = !!(wellness.sleep_hours != null || wellness.fatigue_1_5 != null || nut.cal != null)
+  // ── Tips ordered by pts gain ──────────────────────────────────────────
+  const tips = []
+
+  const sleepGain = 40 - Math.round(sleepPts)
+  if (sleepGain > 0) {
+    if (!sleepHasData) {
+      tips.push({ text: `Log last night's sleep (${yesterday}) in the Wellness tab`, gain: sleepGain, where: 'Wellness tab' })
+    } else {
+      const hours = sleepRow.sleep_hours || 0
+      const quality = sleepRow.sleep_quality_1_5 || 3
+      if (hours < 8) {
+        const g = Math.round((1 - Math.min(hours / 8, 1)) * 20)
+        if (g > 0) tips.push({ text: `Sleep 8h tonight — last night was ${hours.toFixed(1)}h`, gain: g, where: null })
+      }
+      if (quality < 5) {
+        const g = Math.round(((5 - quality) / 5) * 20)
+        if (g > 0) tips.push({ text: `Improve sleep quality — currently ${quality}/5, aim for 5/5`, gain: g, where: null })
+      }
+    }
+  }
+
+  const wellnessGain = 40 - Math.round(wellnessPts) + loadPenalty
+  if (wellnessGain > 0) {
+    if (!wellnessHasData) {
+      tips.push({ text: 'Log today\'s fatigue & soreness in the Wellness tab', gain: wellnessGain, where: 'Wellness tab' })
+    } else {
+      const fat = wellnessRow.fatigue_1_5 || 3
+      const sor = wellnessRow.soreness_1_5 || 3
+      if (fat > 1) {
+        const g = Math.round(((fat - 1) / 4) * 20)
+        tips.push({ text: `Reduce fatigue to 1/5 via rest or easy aerobic (currently ${fat}/5)`, gain: g, where: null })
+      }
+      if (sor > 1) {
+        const g = Math.round(((sor - 1) / 4) * 20)
+        tips.push({ text: `Reduce soreness to 1/5 via stretching/foam rolling (currently ${sor}/5)`, gain: g, where: null })
+      }
+    }
+  }
+
+  const nutritionGain = 20 - Math.round(nutritionPts)
+  if (nutritionGain > 0) {
+    if (!targets.calories) {
+      tips.push({ text: 'Set your daily calorie target', gain: nutritionGain, where: 'Nutrition → Targets' })
+    } else if (nut.cal == null) {
+      tips.push({ text: 'Log today\'s meals to track fuelling', gain: nutritionGain, where: 'Nutrition tab' })
+    } else {
+      const missing = targets.calories - Math.round(nut.cal || 0)
+      tips.push({ text: `Eat ${missing} more kcal today to hit your ${targets.calories} kcal target`, gain: nutritionGain, where: null })
+    }
+  }
+
+  tips.sort((a, b) => b.gain - a.gain)
 
   return {
     score,
     tier,
     advice,
-    hasData,
+    hasData: sleepHasData || wellnessHasData || nut.cal != null,
+    todaySessionsLogged: todaySessions.length,
+    todayLoadNote: loadNote,
     breakdown: {
-      sleep: Math.round(sleepPts),
-      wellness: Math.round(wellnessPts),
-      nutrition: Math.round(nutritionPts),
+      sleep:     { pts: Math.round(sleepPts),     max: 40, gaps: sleepGaps },
+      wellness:  { pts: Math.round(wellnessPts),  max: 40, gaps: wellnessGaps },
+      nutrition: { pts: Math.round(nutritionPts), max: 20, gaps: nutritionGaps },
     },
+    tips,
   }
 })
 
