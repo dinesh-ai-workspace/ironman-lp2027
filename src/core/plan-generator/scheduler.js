@@ -10,6 +10,7 @@ const {
 
 const {
   getMaxLongBikeDuration,
+  getMaxLongRunDuration,
   getRunCaps,
   shouldIncludeBrick,
   shouldIncludeLPSpecificBikeWork,
@@ -182,17 +183,21 @@ function scheduleWeek(config) {
       return sessions;
     }
 
-    // Non-race taper weeks: reduced volume across all disciplines
-    const taperFactors = [0.75, 0.60, 0.45]
-    const taperFactor = taperWeekIndex < taperFactors.length ? taperFactors[taperWeekIndex] : 0.45
+    // Non-race taper weeks: explicit volumes matching the 43-week plan.
+    // Taper wk1=120min bike+120min run, wk2=90+90, wk3=60+60.
+    const taperBikeDurations = [120, 90, 60];
+    const taperRunDurations  = [120, 90, 60];
+    const taperSwimFactors   = [0.75, 0.60, 0.45];
 
-    const swDur = roundTo5(Math.min(swimDuration.max, swimDuration.min + 10) * taperFactor);
+    const swimBase = Math.min(swimDuration.max, swimDuration.min + 10);
+    const swFactor = taperSwimFactors[taperWeekIndex] != null ? taperSwimFactors[taperWeekIndex] : 0.45;
+    const swDur = roundTo5(swimBase * swFactor);
     const swDist = estimateSwimDistance(swDur, weekNum);
     sessions.push(makeSession(dayDate(weekStartDate, 1), 'swim', 'technique', swDur,
       swDist, 2, false, 'race_prep', 'supporting',
       'Taper swim — maintain feel, reduce volume. estimated_distance:true'));
 
-    const bikeDur = roundTo5(Math.min(maxBike * taperFactor, 180));
+    const bikeDur = taperBikeDurations[taperWeekIndex] != null ? taperBikeDurations[taperWeekIndex] : 60;
     sessions.push(makeSession(dayDate(weekStartDate, 3), 'bike', 'endurance_z2', bikeDur,
       null, 2, false, 'aerobic_base', 'supporting',
       'Taper bike — reduced volume, race-pace efforts'));
@@ -202,14 +207,13 @@ function scheduleWeek(config) {
       estimateSwimDistance(swDur2, weekNum), 2, false, 'race_prep', 'optional',
       'Taper swim — second session. estimated_distance:true'));
 
-    const runDur = roundTo5(Math.min(60 * taperFactor, 45));
+    const runDur = taperRunDurations[taperWeekIndex] != null ? taperRunDurations[taperWeekIndex] : 45;
     const runDist = estimateRunDistance(runDur);
-    const capOk = !wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, runDist);
-    if (capOk) {
+    if (!wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, runDist)) {
       weeklyRunMiles += runDist;
-      sessions.push(makeSession(dayDate(weekStartDate, 5), 'run', 'easy', runDur,
-        runDist, 2, false, 'aerobic_base', 'supporting',
-        'Taper run — easy Z2, stay sharp. estimated_distance:true'));
+      sessions.push(makeSession(dayDate(weekStartDate, 5), 'run', 'long_run', runDur,
+        runDist, 2, false, 'endurance', 'key',
+        'Taper long run — Z2 durability, maintain feel. estimated_distance:true'));
     }
 
     return sessions;
@@ -328,44 +332,28 @@ function scheduleWeek(config) {
     ));
   }
 
-  // Saturday: Long Bike
-  // Determine max allowed duration from ramp table (capped at 360min regardless).
-  const longBikeMax = Math.min(360, getMaxLongBikeDuration(weekNum));
+  // Saturday: Long Bike — duration comes directly from the ramp table.
+  const longBikeMax = getMaxLongBikeDuration(weekNum);
 
-  // Determine simulation ride window: last 2 non-taper weeks of the peak block.
-  // These are the weeks where a 5.5-6hr ride is planned (once only).
+  // Simulation ride: one 345-min ride at week 38 only (second-to-last peak week).
   const peakBlock = phaseBlocks.find(b => b.phase === 'peak');
-  const simRideWeeks = peakBlock
-    ? [peakBlock.weekEnd - 1, peakBlock.weekEnd]
-    : [38, 39];
+  const simRideWeeks = peakBlock ? [peakBlock.weekEnd - 1] : [38];
 
   const allBikeSessions = allScheduledSessions
     .filter(s => s.discipline === 'bike')
     .map(s => ({ weekNum: s._weekNum, durationMin: s.target_duration, type: s.type }));
 
-  // Check if a simulation ride has already been placed (durationMin >= 330).
   const simRideAlreadyPlaced = allBikeSessions.some(s => s.durationMin >= 330);
-
-  // Is this week the simulation ride week?
   const isSimRideWeek = simRideWeeks.includes(weekNum) && !simRideAlreadyPlaced && !isStepBack;
 
-  // Determine target long bike duration.
   let longBikeDur;
   if (isSimRideWeek) {
-    longBikeDur = 330; // 5.5hr minimum simulation ride
+    longBikeDur = 345; // 5.75hr simulation ride — matches ramp table wk38 max
   } else {
-    // Scale within ramp ceiling; gradually climb from 60% of max to max over the plan.
-    const longBikeBase = Math.min(
-      longBikeMax,
-      Math.max(90, Math.round(longBikeMax * Math.min(1, 0.6 + weekNum * 0.012)))
-    );
-    longBikeDur = roundTo5(longBikeBase * sbMult);
-    // Never exceed 320min unless in sim-ride window (keep rides sub-sim-ride).
-    if (!simRideWeeks.includes(weekNum) || simRideAlreadyPlaced) {
-      longBikeDur = Math.min(longBikeDur, 320);
-    }
+    longBikeDur = roundTo5(longBikeMax * sbMult);
+    // Keep all non-sim rides below the 330min threshold to avoid constraint violation.
+    longBikeDur = Math.min(longBikeDur, 325);
   }
-  longBikeDur = roundTo5(longBikeDur * (isSimRideWeek ? 1 : 1)); // already scaled above
 
   // Determine bike session type
   let satBikeType = isSimRideWeek ? 'race_simulation' : 'long_ride';
@@ -422,10 +410,9 @@ function scheduleWeek(config) {
     weeklyRunMiles -= runDistThu;
   }
 
-  // Long run on Thursday
+  // Long run on Thursday — duration from ramp table, subject to caps.
   const { longRunCapMi, longRunCapMin } = runCaps;
-  let longRunBase = weekNum <= 8 ? 60 : weekNum <= 16 ? 75 : weekNum <= 24 ? 90 : weekNum <= 32 ? 105 : 120;
-  let longRunDur = roundTo5(Math.min(longRunBase, longRunCapMin) * sbMult);
+  let longRunDur = roundTo5(Math.min(getMaxLongRunDuration(weekNum), longRunCapMin) * sbMult);
   let longRunDist = estimateRunDistance(longRunDur);
 
   // Enforce ceiling

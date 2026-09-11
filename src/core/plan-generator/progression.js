@@ -1,6 +1,6 @@
 'use strict';
 
-const { interpolateBikeMax } = require('./constraints');
+const { interpolateBikeMax, interpolateRunMax } = require('./constraints');
 
 /**
  * Pure functions for per-discipline progression logic.
@@ -16,6 +16,17 @@ const { interpolateBikeMax } = require('./constraints');
  */
 function getMaxLongBikeDuration(weekNum) {
   return interpolateBikeMax(weekNum);
+}
+
+/**
+ * Returns the maximum long-run duration (minutes) for the given week.
+ * Uses the RUN_RAMP_TABLE with linear interpolation. Caps at 150 min from week 24.
+ *
+ * @param {number} weekNum
+ * @returns {number}
+ */
+function getMaxLongRunDuration(weekNum) {
+  return interpolateRunMax(weekNum);
 }
 
 /**
@@ -35,8 +46,8 @@ function getRunCaps(weekNum) {
  * Returns true if a brick session should be included this week.
  *
  * Schedule:
- * - weeks 1-12:  no bricks
- * - weeks 13-24: every 2 weeks (odd weeks in that range: 13,15,17,19,21,23)
+ * - weeks 1-13:  no bricks
+ * - weeks 14-24: every 2 weeks (even weeks: 14,16,18,20,22,24)
  * - weeks 25-38: every week
  * - weeks 39+:   no bricks (tapering off)
  *
@@ -44,9 +55,9 @@ function getRunCaps(weekNum) {
  * @returns {boolean}
  */
 function shouldIncludeBrick(weekNum) {
-  if (weekNum <= 12) return false;
+  if (weekNum <= 13) return false;
   if (weekNum >= 39) return false;
-  if (weekNum <= 24) return weekNum % 2 === 1; // odd weeks = 13, 15, 17 …
+  if (weekNum <= 24) return weekNum % 2 === 0; // even weeks = 14, 16, 18 …
   return true; // weeks 25-38
 }
 
@@ -130,6 +141,7 @@ function getStepBackMultiplier() {
 
 module.exports = {
   getMaxLongBikeDuration,
+  getMaxLongRunDuration,
   getRunCaps,
   shouldIncludeBrick,
   shouldIncludeLPSpecificBikeWork,

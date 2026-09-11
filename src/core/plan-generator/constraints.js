@@ -7,31 +7,45 @@
 /**
  * Ramp table: max long-ride duration (minutes) by week number.
  * Used by getMaxLongBikeDuration (progression.js) and wouldExceedBikeCap.
+ * Week 38 = simulation ride (345 min). Week 39 = unwind (120 min).
  */
 const BIKE_RAMP_TABLE = {
+  1:  23,
   4:  90,
   8:  120,
   12: 150,
   16: 180,
   20: 210,
   24: 240,
-  28: 270,
-  32: 300,
-  36: 330,
-  38: 360,
-  39: 360,
+  32: 285,
+  34: 300,
+  36: 315,
+  38: 345,
+  39: 120,
 };
 
 /**
- * Linearly interpolate the maximum long-bike duration for a given week.
+ * Ramp table: max long-run duration (minutes) by week number.
+ * Caps at 150 min from week 24 onward.
  */
-function interpolateBikeMax(weekNum) {
-  const keys = Object.keys(BIKE_RAMP_TABLE).map(Number).sort((a, b) => a - b);
+const RUN_RAMP_TABLE = {
+  1:  60,
+  4:  73,
+  8:  90,
+  12: 105,
+  16: 120,
+  20: 135,
+  24: 150,
+  39: 150,
+};
 
-  if (weekNum <= keys[0]) return BIKE_RAMP_TABLE[keys[0]];
-  if (weekNum >= keys[keys.length - 1]) return BIKE_RAMP_TABLE[keys[keys.length - 1]];
-
-  // Find surrounding checkpoints.
+/**
+ * Generic linear interpolation over an integer-keyed ramp table.
+ */
+function interpolateTable(table, weekNum) {
+  const keys = Object.keys(table).map(Number).sort((a, b) => a - b);
+  if (weekNum <= keys[0]) return table[keys[0]];
+  if (weekNum >= keys[keys.length - 1]) return table[keys[keys.length - 1]];
   let lower = keys[0];
   let upper = keys[keys.length - 1];
   for (let i = 0; i < keys.length - 1; i++) {
@@ -41,9 +55,22 @@ function interpolateBikeMax(weekNum) {
       break;
     }
   }
-
   const t = (weekNum - lower) / (upper - lower);
-  return Math.round(BIKE_RAMP_TABLE[lower] + t * (BIKE_RAMP_TABLE[upper] - BIKE_RAMP_TABLE[lower]));
+  return Math.round(table[lower] + t * (table[upper] - table[lower]));
+}
+
+/**
+ * Linearly interpolate the maximum long-bike duration for a given week.
+ */
+function interpolateBikeMax(weekNum) {
+  return interpolateTable(BIKE_RAMP_TABLE, weekNum);
+}
+
+/**
+ * Linearly interpolate the maximum long-run duration for a given week.
+ */
+function interpolateRunMax(weekNum) {
+  return interpolateTable(RUN_RAMP_TABLE, weekNum);
 }
 
 /**
@@ -142,19 +169,10 @@ function wouldExceedBikeCap(durationMin, weekNum, allBikeSessions) {
   // Strictly exceeds the ramp ceiling — always a violation regardless of week.
   if (durationMin > maxAllowed) return true;
 
-  // Simulation-ride window rules:
-  // From week 37 onward, any session >= 330min is a "simulation ride" and is restricted:
-  //   - It may only occur at week 38 or 39 (exactly).
-  //   - Only one simulation ride is ever allowed per plan (no repeat).
-  //
-  // At week 36, the ramp max is exactly 330min. A 330min ride there is a regular long ride
-  // at its ceiling — NOT subject to the simulation ride restriction (ramp check handles it).
-  // The sim ride restriction kicks in from week 37+ to prevent premature placement.
+  // Simulation-ride restriction: only one 330+ min ride is allowed, and only at week 38.
+  // Week 36 ramp max is 315min, week 37 interpolates to ~330min — cap non-sim weeks below 330.
   if (weekNum >= 37 && durationMin >= 330) {
-    // Must be in weeks 38 or 39 exactly.
-    if (weekNum !== 38 && weekNum !== 39) return true;
-
-    // Already one simulation ride exists — no repeats.
+    if (weekNum !== 38) return true;
     const existingSimRide = allBikeSessions.some(s => s.durationMin >= 330);
     if (existingSimRide) return true;
   }
@@ -195,5 +213,7 @@ module.exports = {
   isStepBackWeek,
   isTaperWeek,
   BIKE_RAMP_TABLE,
+  RUN_RAMP_TABLE,
   interpolateBikeMax,
+  interpolateRunMax,
 };
