@@ -52,13 +52,26 @@ function shouldIncludeBrick(weekNum) {
 
 /**
  * Returns true if this week should include Lake Placid-specific bike work
- * (low-cadence torque sets, hill climbing). Introduced from week 25 onward.
+ * (low-cadence torque sets, hill climbing). Introduced from week 12 onward.
  *
  * @param {number} weekNum
  * @returns {boolean}
  */
 function shouldIncludeLPSpecificBikeWork(weekNum) {
-  return weekNum >= 25;
+  return weekNum >= 12;
+}
+
+/**
+ * Returns the LP-specific bike session type for the given week.
+ * Weeks 12-15: cadence and terrain work.
+ * Weeks 16+: hill climbing focus.
+ *
+ * @param {number} weekNum
+ * @returns {'cadence_and_terrain'|'hill_climbing'}
+ */
+function getLPBikeType(weekNum) {
+  if (weekNum < 16) return 'cadence_and_terrain'
+  return 'hill_climbing'
 }
 
 /**
@@ -120,6 +133,7 @@ module.exports = {
   getRunCaps,
   shouldIncludeBrick,
   shouldIncludeLPSpecificBikeWork,
+  getLPBikeType,
   getSwimFocus,
   getSwimSessionDuration,
   getWeeklySessionTargets,

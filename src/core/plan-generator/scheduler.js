@@ -13,6 +13,7 @@ const {
   getRunCaps,
   shouldIncludeBrick,
   shouldIncludeLPSpecificBikeWork,
+  getLPBikeType,
   getSwimFocus,
   getSwimSessionDuration,
   getStepBackMultiplier,
@@ -182,7 +183,8 @@ function scheduleWeek(config) {
     }
 
     // Non-race taper weeks: reduced volume across all disciplines
-    const taperFactor = 1 - (taperWeekIndex + 1) * 0.15; // 85%, 70%, 55% …
+    const taperFactors = [0.75, 0.60, 0.45]
+    const taperFactor = taperWeekIndex < taperFactors.length ? taperFactors[taperWeekIndex] : 0.45
 
     const swDur = roundTo5(Math.min(swimDuration.max, swimDuration.min + 10) * taperFactor);
     const swDist = estimateSwimDistance(swDur, weekNum);
@@ -240,7 +242,7 @@ function scheduleWeek(config) {
   ));
 
   // Wednesday: Bike (endurance or hill climbing)
-  const bikeType = includeLPBike ? 'hill_climbing' : (phase === 'foundation' ? 'technique_indoor' : 'endurance_z2');
+  const bikeType = includeLPBike ? getLPBikeType(weekNum) : (phase === 'foundation' ? 'technique_indoor' : 'endurance_z2');
   const bikeBaseDur = phase === 'foundation' ? 75 : (weekNum <= 16 ? 90 : weekNum <= 24 ? 105 : 120);
   const bikeDurWed = roundTo5(Math.min(bikeBaseDur * sbMult, getMaxLongBikeDuration(weekNum)));
   sessions.push(makeSession(

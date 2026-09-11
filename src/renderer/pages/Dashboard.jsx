@@ -67,50 +67,35 @@ function MiniBar({ pct, color }) {
   )
 }
 
-function NutritionBar({ nutrition }) {
-  const { pts, max, calPts, proteinPts, calSweet, calLow, proteinTarget, nutDateLabel, gaps } = nutrition
-  const noData = !nutDateLabel
+function FuelingStatusBar({ fueling }) {
+  if (!fueling) return null
+  const color = fueling.status === 'green' ? 'var(--accent-green)' : fueling.status === 'red' ? '#f87171' : 'var(--accent-amber)'
+  const label = fueling.status === 'green' ? 'Well fueled' : fueling.status === 'red' ? 'Under-fueled' : fueling.status === 'yellow' ? 'Marginal fueling' : 'No food logged'
   return (
-    <div style={{ marginBottom: '10px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px' }}>
-        <span>Nutrition {nutDateLabel ? <span style={{ opacity: 0.6 }}>({nutDateLabel})</span> : ''}</span>
-        <span style={{ color: pts >= max ? 'var(--accent-green)' : 'inherit' }}>{pts}/{max}</span>
+    <div className="card" style={{ marginBottom: '24px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+        <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>Fueling Status</span>
+        <span style={{ fontSize: '11px', background: color, color: '#0f172a', borderRadius: '4px', padding: '1px 8px', fontWeight: 600 }}>{label}</span>
       </div>
-      {noData ? (
-        <div style={{ height: '4px', borderRadius: '2px', background: 'var(--border)' }} />
-      ) : (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>
-            <span>Calories</span>
-            <span style={{ color: calPts >= 10 ? 'var(--accent-green)' : 'inherit' }}>{calPts}/10</span>
-          </div>
-          <MiniBar pct={calPts / 10} color={calPts >= 10 ? 'var(--accent-green)' : 'var(--accent-blue)'} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px', marginTop: '4px' }}>
-            <span>Protein</span>
-            <span style={{ color: proteinPts >= 10 ? 'var(--accent-green)' : 'inherit' }}>{proteinPts}/10</span>
-          </div>
-          <MiniBar pct={proteinPts / 10} color={proteinPts >= 10 ? 'var(--accent-green)' : '#fb923c'} />
-        </>
-      )}
-      {gaps && gaps.map((g, i) => (
-        <div key={i} style={{
-          fontSize: '10px', marginTop: '3px', display: 'flex', gap: '4px',
-          color: g.includes('✓') ? 'var(--accent-green)' : 'var(--accent-amber)',
-        }}>
-          <span style={{ flexShrink: 0 }}>↳</span><span>{g}</span>
-        </div>
+      {fueling.details.map((d, i) => (
+        <div key={i} style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '3px' }}>↳ {d}</div>
       ))}
     </div>
   )
 }
 
 function ReadinessScoreCard({ readiness }) {
-  const { score, tier, advice, breakdown, tips, todayLoadNote, garmin } = readiness
+  const { score, tier, advice, breakdown, tips, todayLoadNote, garmin, hrvBaseline, rhrBaseline, sleepOverride, painOverride } = readiness
   const color = TIER_COLOR[tier]
   const hasTips = tips && tips.length > 0 && score < 100
 
   return (
     <div className="card" style={{ marginBottom: '24px', borderColor: color, background: TIER_BG[tier] }}>
+      {(sleepOverride || painOverride) && (
+        <div style={{ fontSize: '12px', color: '#f87171', fontWeight: 600, marginBottom: '8px', padding: '6px 10px', background: 'rgba(248,113,113,0.1)', borderRadius: '6px', border: '1px solid #f87171' }}>
+          ⚠ {sleepOverride ? 'Sleep override active — no hard training' : 'Pain override active — rest day'}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '20px' }}>
 
         {/* Score */}
@@ -128,8 +113,8 @@ function ReadinessScoreCard({ readiness }) {
             </span>
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{advice}</div>
-          {garmin && (garmin.bodyBattery != null || garmin.hrv != null) && (
-            <div style={{ display: 'flex', gap: '12px', marginTop: '6px' }}>
+          {garmin && (garmin.bodyBattery != null || garmin.hrv != null || garmin.rhr != null) && (
+            <div style={{ display: 'flex', gap: '12px', marginTop: '6px', flexWrap: 'wrap' }}>
               {garmin.bodyBattery != null && (
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   Body Battery <span style={{ fontWeight: 600, color: 'var(--accent-blue)' }}>{garmin.bodyBattery}</span>
@@ -138,11 +123,13 @@ function ReadinessScoreCard({ readiness }) {
               {garmin.hrv != null && (
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   HRV <span style={{ fontWeight: 600, color: 'var(--accent-blue)' }}>{garmin.hrv}ms</span>
+                  {hrvBaseline != null && <span style={{ opacity: 0.6 }}> (baseline {Math.round(hrvBaseline)}ms)</span>}
                 </span>
               )}
               {garmin.rhr != null && (
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   RHR <span style={{ fontWeight: 600, color: 'var(--accent-blue)' }}>{garmin.rhr}bpm</span>
+                  {rhrBaseline != null && <span style={{ opacity: 0.6 }}> (baseline {Math.round(rhrBaseline)}bpm)</span>}
                 </span>
               )}
             </div>
@@ -177,8 +164,8 @@ function ReadinessScoreCard({ readiness }) {
         {/* Breakdown bars */}
         <div style={{ minWidth: '220px', flexShrink: 0 }}>
           <BreakdownBar label="Sleep" pts={breakdown.sleep.pts} max={breakdown.sleep.max} gaps={breakdown.sleep.gaps} />
-          <BreakdownBar label="Recovery (Body Battery)" pts={breakdown.wellness.pts} max={breakdown.wellness.max} gaps={breakdown.wellness.gaps} />
-          <NutritionBar nutrition={breakdown.nutrition} />
+          <BreakdownBar label="Recovery" pts={breakdown.recovery.pts} max={breakdown.recovery.max} gaps={breakdown.recovery.gaps} />
+          <BreakdownBar label="Wellness" pts={breakdown.wellness.pts} max={breakdown.wellness.max} gaps={breakdown.wellness.gaps} />
         </div>
 
       </div>
@@ -294,9 +281,8 @@ export default function Dashboard() {
       </div>
 
       {/* Daily readiness score */}
-      {readiness && (
-        <ReadinessScoreCard readiness={readiness} />
-      )}
+      {readiness && <ReadinessScoreCard readiness={readiness} />}
+      {readiness && readiness.fueling && <FuelingStatusBar fueling={readiness.fueling} />}
 
       {/* Readiness gates */}
       <ReadinessWidget gates={gates} />
