@@ -575,56 +575,51 @@ ipcMain.handle('stats:readiness-score', () => {
   if (sleepHours != null && sleepHours < 5) sleepOverride = true
   if (todayRow.pain_flag === 1) painOverride = true
 
-  // ── RECOVERY PHYSIOLOGY — 40 pts ──────────────────────────────────────
+  // ── RECOVERY — 70 pts (HRV 50 + Body Battery 15 + Training load 5) ───
   const recoveryGaps = []
 
-  // HRV trend (15 pts)
+  // HRV trend (50 pts) — primary recovery signal
   let hrvPts
   if (garmin.hrv != null && hrvBaseline != null) {
     const ratio = garmin.hrv / hrvBaseline
-    if (ratio >= 1.05) hrvPts = 15
-    else if (ratio >= 0.95) hrvPts = 12
-    else if (ratio >= 0.85) hrvPts = 8
-    else if (ratio >= 0.75) hrvPts = 4
+    if (ratio >= 1.05) hrvPts = 50
+    else if (ratio >= 0.95) hrvPts = 40
+    else if (ratio >= 0.85) hrvPts = 28
+    else if (ratio >= 0.75) hrvPts = 14
     else hrvPts = 0
-    recoveryGaps.push(`HRV ${garmin.hrv}ms vs ${Math.round(hrvBaseline)}ms baseline (${Math.round(ratio * 100)}%)`)
+    const pct = Math.round(ratio * 100)
+    const arrow = ratio >= 1.05 ? '↑↑' : ratio >= 0.95 ? '→' : ratio >= 0.85 ? '↓' : ratio >= 0.75 ? '↓↓' : '↓↓↓'
+    recoveryGaps.push(`HRV ${garmin.hrv}ms ${arrow} (baseline ${Math.round(hrvBaseline)}ms, ${pct}%)`)
   } else if (garmin.hrv != null) {
-    hrvPts = 8  // neutral — have today but no baseline yet
-    recoveryGaps.push(`HRV ${garmin.hrv}ms — building baseline (need 7+ data points)`)
+    hrvPts = 25  // neutral — have today but no baseline yet
+    recoveryGaps.push(`HRV ${garmin.hrv}ms — building 7-day baseline`)
   } else {
-    hrvPts = 8  // neutral — no data
+    hrvPts = 25  // neutral — no data
     recoveryGaps.push('No HRV data — import Garmin sleep CSV in Wellness tab')
   }
 
-  // RHR trend (10 pts)
-  let rhrPts
-  if (garmin.rhr != null && rhrBaseline != null) {
-    const delta = garmin.rhr - rhrBaseline
-    if (delta <= -2) rhrPts = 10
-    else if (delta <= 1) rhrPts = 8
-    else if (delta <= 4) rhrPts = 5
-    else if (delta <= 7) rhrPts = 2
-    else rhrPts = 0
-    recoveryGaps.push(`RHR ${garmin.rhr}bpm vs ${Math.round(rhrBaseline)}bpm baseline (${delta > 0 ? '+' : ''}${Math.round(delta)}bpm)`)
-  } else if (garmin.rhr != null) {
-    rhrPts = 5  // neutral
-    recoveryGaps.push(`RHR ${garmin.rhr}bpm — building baseline (need 7+ data points)`)
-  } else {
-    rhrPts = 5  // neutral
-    recoveryGaps.push('No RHR data — import Garmin sleep CSV in Wellness tab')
-  }
-
-  // Body Battery (10 pts)
+  // Body Battery (15 pts) — Garmin composite
   let bbPts
   if (garmin.bodyBattery != null) {
-    bbPts = (garmin.bodyBattery / 100) * 10
-    recoveryGaps.push(`Body Battery ${garmin.bodyBattery}/100`)
+    bbPts = Math.round((garmin.bodyBattery / 100) * 15)
+    const bb = garmin.bodyBattery
+    if (bb >= 75) recoveryGaps.push(`Body Battery ${bb}/100 ✓`)
+    else if (bb >= 50) recoveryGaps.push(`Body Battery ${bb}/100 — moderate`)
+    else recoveryGaps.push(`Body Battery ${bb}/100 — low recovery`)
   } else {
-    bbPts = 5  // neutral
+    bbPts = 7  // neutral
     recoveryGaps.push('No Body Battery data — import Garmin sleep CSV')
   }
 
-  // Training load (5 pts): hard sessions (rpe>=7) in last 7 days
+  // RHR — informational only, shown in Garmin pills but not scored
+  if (garmin.rhr != null && rhrBaseline != null) {
+    const delta = garmin.rhr - rhrBaseline
+    recoveryGaps.push(`RHR ${garmin.rhr}bpm (${delta > 0 ? '+' : ''}${Math.round(delta)} vs baseline)`)
+  } else if (garmin.rhr != null) {
+    recoveryGaps.push(`RHR ${garmin.rhr}bpm`)
+  }
+
+  // Training load (5 pts): hard sessions (rpe≥7) in last 7 days
   const hardCount = hardSessions7d.length
   const hardMinutes = hardSessions7d.reduce((s, r) => s + (r.duration || 0), 0)
   let loadPts
@@ -633,7 +628,7 @@ ipcMain.handle('stats:readiness-score', () => {
   else if (hardCount <= 2 || hardMinutes <= 120) loadPts = 3
   else loadPts = Math.max(0, 5 - hardCount)
 
-  const recoveryPts = hrvPts + rhrPts + bbPts + loadPts
+  const recoveryPts = Math.round(hrvPts + bbPts + loadPts)
 
   // Training load note for today
   let loadNote = null
@@ -647,40 +642,8 @@ ipcMain.handle('stats:readiness-score', () => {
     }
   }
 
-  // ── SUBJECTIVE WELLNESS — 30 pts ──────────────────────────────────────
-  const wellnessGaps = []
-
-  let fatiguePts
-  if (todayRow.fatigue_1_5 != null) {
-    fatiguePts = ((6 - todayRow.fatigue_1_5) / 5) * 10
-    if (todayRow.fatigue_1_5 > 2) wellnessGaps.push(`Fatigue ${todayRow.fatigue_1_5}/5 — aim for ≤2`)
-  } else {
-    fatiguePts = 5  // neutral
-    wellnessGaps.push('No fatigue rating — log in Wellness tab')
-  }
-
-  let sorenessPts
-  if (todayRow.soreness_1_5 != null) {
-    sorenessPts = ((6 - todayRow.soreness_1_5) / 5) * 10
-    if (todayRow.soreness_1_5 > 2) wellnessGaps.push(`Soreness ${todayRow.soreness_1_5}/5 — aim for ≤2`)
-  } else {
-    sorenessPts = 5  // neutral
-    wellnessGaps.push('No soreness rating — log in Wellness tab')
-  }
-
-  let motivationPts
-  if (todayRow.motivation_1_5 != null) {
-    motivationPts = ((todayRow.motivation_1_5 - 1) / 4) * 10
-    if (todayRow.motivation_1_5 < 3) wellnessGaps.push(`Motivation ${todayRow.motivation_1_5}/5 — low motivation today`)
-  } else {
-    motivationPts = 5  // neutral
-    wellnessGaps.push('No motivation rating — log in Wellness tab')
-  }
-
-  const wellnessPts = fatiguePts + sorenessPts + motivationPts
-
   // ── TOTAL SCORE + TIER ────────────────────────────────────────────────
-  let score = Math.round(sleepPts + recoveryPts + wellnessPts)
+  let score = Math.round(sleepPts + recoveryPts)
   score = Math.max(0, Math.min(100, score))
 
   let tier = score >= 80 ? 'green' : score >= 65 ? 'amber' : 'red'
@@ -769,29 +732,18 @@ ipcMain.handle('stats:readiness-score', () => {
 
   // Recovery tips
   if (garmin.hrv == null) {
-    tips.push({ text: 'Import Garmin sleep CSV to track HRV trend', gain: 7, where: 'Wellness tab' })
-  }
-  if (garmin.rhr == null && garmin.hrv == null) {
-    // already covered above
-  } else if (garmin.rhr == null) {
-    tips.push({ text: 'Import Garmin sleep CSV to track RHR trend', gain: 5, where: 'Wellness tab' })
+    tips.push({ text: 'Import Garmin sleep CSV to track HRV trend', gain: 25, where: 'Wellness tab' })
+  } else if (hrvBaseline == null) {
+    tips.push({ text: 'Keep importing Garmin CSV daily to build HRV baseline (need 7+ days)', gain: 10, where: 'Wellness tab' })
+  } else {
+    const hrvGain = 50 - hrvPts
+    if (hrvGain > 0) tips.push({ text: `HRV ${garmin.hrv}ms is ${Math.round((1 - garmin.hrv / hrvBaseline) * 100)}% below baseline — prioritize sleep and recovery`, gain: hrvGain, where: null })
   }
   if (garmin.bodyBattery == null) {
-    tips.push({ text: 'Import Garmin sleep CSV to track Body Battery', gain: 5, where: 'Wellness tab' })
+    tips.push({ text: 'Import Garmin sleep CSV to track Body Battery', gain: 7, where: 'Wellness tab' })
   } else {
-    const bbGain = Math.round(10 - bbPts)
-    if (bbGain > 0) tips.push({ text: `Body Battery ${garmin.bodyBattery}/100 — prioritize sleep and recovery`, gain: bbGain, where: null })
-  }
-
-  // Wellness tips
-  if (todayRow.fatigue_1_5 == null) {
-    tips.push({ text: 'Log fatigue rating in Wellness tab', gain: 5, where: 'Wellness tab' })
-  }
-  if (todayRow.soreness_1_5 == null) {
-    tips.push({ text: 'Log soreness rating in Wellness tab', gain: 5, where: 'Wellness tab' })
-  }
-  if (todayRow.motivation_1_5 == null) {
-    tips.push({ text: 'Log motivation rating in Wellness tab', gain: 5, where: 'Wellness tab' })
+    const bbGain = 15 - bbPts
+    if (bbGain > 0) tips.push({ text: `Body Battery ${garmin.bodyBattery}/100 — sleep more to recover`, gain: bbGain, where: null })
   }
 
   tips.sort((a, b) => b.gain - a.gain)
@@ -801,7 +753,7 @@ ipcMain.handle('stats:readiness-score', () => {
     score,
     tier,
     advice,
-    hasData: sleepHasData || garmin.bodyBattery != null || garmin.hrv != null || todayRow.fatigue_1_5 != null,
+    hasData: sleepHasData || garmin.bodyBattery != null || garmin.hrv != null,
     sleepOverride,
     painOverride,
     garmin,
@@ -815,15 +767,10 @@ ipcMain.handle('stats:readiness-score', () => {
         durPts: Math.round(durPts), qualPts: Math.round(qualPts),
       },
       recovery: {
-        pts: Math.round(recoveryPts), max: 40, gaps: recoveryGaps,
-        hrvPts, rhrPts, bbPts: Math.round(bbPts), loadPts,
-        hrvBaseline, rhrBaseline,
-      },
-      wellness: {
-        pts: Math.round(wellnessPts), max: 30, gaps: wellnessGaps,
-        fatiguePts: Math.round(fatiguePts),
-        sorenessPts: Math.round(sorenessPts),
-        motivationPts: Math.round(motivationPts),
+        pts: Math.round(recoveryPts), max: 70, gaps: recoveryGaps,
+        hrvPts, bbPts, loadPts,
+        hrvBaseline: hrvBaseline != null ? Math.round(hrvBaseline) : null,
+        rhrBaseline: rhrBaseline != null ? Math.round(rhrBaseline) : null,
       },
     },
     fueling: {
