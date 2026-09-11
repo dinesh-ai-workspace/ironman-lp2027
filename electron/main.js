@@ -487,14 +487,14 @@ ipcMain.handle('stats:progress', () => {
 
 // ─── IPC: stats:readiness-score ──────────────────────────────────────────
 ipcMain.handle('stats:readiness-score', () => {
-  const today = new Date().toISOString().slice(0, 10)
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+  const _now = new Date()
+  const today = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`
+  const _yd = new Date(_now); _yd.setDate(_yd.getDate() - 1)
+  const yesterday = `${_yd.getFullYear()}-${String(_yd.getMonth()+1).padStart(2,'0')}-${String(_yd.getDate()).padStart(2,'0')}`
 
-  // Sleep = YESTERDAY's entry (last night's sleep logged this morning)
-  const sleepRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(yesterday) || {}
-  // Fatigue/soreness = TODAY's morning check-in (manual override)
-  // Body Battery and HRV are parsed from Garmin sleep notes on yesterday's row
-  const wellnessRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
+  // Sleep + Garmin = TODAY's entry (last night's sleep logged this morning, stored under today's date)
+  const sleepRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
+  const wellnessRow = sleepRow
 
   // Parse Body Battery + HRV from Garmin sleep notes (format: "... | Body Battery: 54 | HRV: 38 | ...")
   function parseNotes(notes) {
@@ -516,7 +516,7 @@ ipcMain.handle('stats:readiness-score', () => {
     if (bb >= 20) return 4
     return 5
   }
-  const garmin = parseNotes(sleepRow.notes)  // yesterday's Garmin data
+  const garmin = parseNotes(sleepRow.notes)  // today's Garmin data (reflects last night)
   // Nutrition = most recent day with data (yesterday preferred; fall back to today)
   const targets = db.prepare('SELECT * FROM nutrition_targets ORDER BY id DESC LIMIT 1').get() || {}
   // Calorie sweet spot: 1800–2000 kcal. Points deducted below 1800 AND above 2000.
@@ -715,7 +715,7 @@ ipcMain.handle('stats:readiness-score', () => {
     score,
     tier,
     advice,
-    hasData: sleepHasData || fat != null || sor != null || !!nutDate,
+    hasData: sleepHasData || fat != null || !!nutDate,
     garmin,
     todaySessionsLogged: todaySessions.length,
     todayLoadNote: loadNote,
