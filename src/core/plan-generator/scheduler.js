@@ -262,7 +262,7 @@ function scheduleWeek(config) {
     weekNum >= 18 && weekNum <= 20 ? 'Tune-up race window this week — see race notes' : ''
   ));
 
-  // Wednesday: Optional strength (same day)
+  // Wednesday: Strength — secondary to the bike, so optional
   if (!isStepBack) {
     const strType = phase === 'foundation' ? 'foundation_strength' : 'in_season_maintenance';
     sessions.push(makeSession(
@@ -315,7 +315,7 @@ function scheduleWeek(config) {
     `Second swim — ${swimFocus}. estimated_distance:true`
   ));
 
-  // Friday: Optional strength (same day)
+  // Friday: Strength — primary strength session of the week, supporting
   if (!isStepBack) {
     const strType = phase === 'foundation' ? 'foundation_strength' : 'in_season_maintenance';
     sessions.push(makeSession(
@@ -327,7 +327,7 @@ function scheduleWeek(config) {
       2,
       false,
       phase === 'foundation' ? 'stability' : 'maintenance',
-      'optional',
+      'supporting',
       'Same day as swim — keep volume in check'
     ));
   }
