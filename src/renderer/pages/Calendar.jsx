@@ -192,116 +192,133 @@ export default function Calendar() {
       {loading ? (
         <div style={{ color: 'var(--text-muted)' }}>Loading...</div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '12px' }}>
-          {days.map(({ date, dateStr, planned, done, isToday }) => (
-            <div
-              key={dateStr}
-              className="card"
-              style={{
-                minHeight: '160px',
-                borderColor: isToday ? 'var(--accent-blue)' : 'var(--border)',
-                padding: '12px',
-                cursor: planned.length > 0 ? 'pointer' : 'default',
-              }}
-              onClick={() => setExpanded(expanded === dateStr ? null : dateStr)}
-            >
-              <div style={{
-                fontSize: '12px',
-                fontWeight: 600,
-                color: isToday ? 'var(--accent-blue)' : 'var(--text-muted)',
-                marginBottom: '8px',
-              }}>
-                {formatHeaderDate(date)}
-                {done.length > 0 && (
-                  <span style={{ marginLeft: '6px', color: 'var(--accent-green)' }}>✓</span>
+        <>
+          {/* 7-day grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '12px' }}>
+            {days.map(({ date, dateStr, planned, done, isToday }) => (
+              <div
+                key={dateStr}
+                className="card"
+                style={{
+                  minHeight: '160px',
+                  borderColor: expanded === dateStr ? 'var(--accent-blue)' : isToday ? 'var(--accent-blue)' : 'var(--border)',
+                  borderWidth: expanded === dateStr ? '2px' : '1px',
+                  padding: '12px',
+                  cursor: planned.length > 0 ? 'pointer' : 'default',
+                }}
+                onClick={() => planned.length > 0 && setExpanded(expanded === dateStr ? null : dateStr)}
+              >
+                <div style={{
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: isToday ? 'var(--accent-blue)' : 'var(--text-muted)',
+                  marginBottom: '8px',
+                }}>
+                  {formatHeaderDate(date)}
+                  {done.length > 0 && (
+                    <span style={{ marginLeft: '6px', color: 'var(--accent-green)' }}>✓</span>
+                  )}
+                </div>
+
+                {planned.length === 0 ? (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rest</div>
+                ) : (
+                  planned.map(s => (
+                    <div key={s.id} style={{ marginBottom: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 500 }}>
+                        <div style={{
+                          width: '8px', height: '8px', borderRadius: '50%',
+                          background: DISC_COLOR[s.discipline] || 'var(--text-muted)',
+                          flexShrink: 0,
+                        }} />
+                        <span style={{ color: DISC_COLOR[s.discipline] }}>
+                          {DISC_LABEL[s.discipline] || s.discipline}
+                        </span>
+                        <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                          {s.target_duration}m
+                        </span>
+                      </div>
+                      {s.importance === 'key' && (
+                        <div style={{ fontSize: '10px', color: 'var(--accent-blue)', marginLeft: '14px' }}>Priority</div>
+                      )}
+                      {s.importance === 'supporting' && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '14px' }}>Base</div>
+                      )}
+                      {s.importance === 'optional' && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '14px', opacity: 0.6 }}>Optional</div>
+                      )}
+                    </div>
+                  ))
+                )}
+
+                {planned.length > 0 && (
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px', opacity: 0.5 }}>
+                    {expanded === dateStr ? '▲ close' : '▼ details'}
+                  </div>
                 )}
               </div>
+            ))}
+          </div>
 
-              {planned.length === 0 ? (
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rest</div>
-              ) : (
-                planned.map(s => (
-                  <div key={s.id} style={{ marginBottom: '6px' }}>
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      fontSize: '12px',
-                      fontWeight: 500,
-                    }}>
-                      <div style={{
-                        width: '8px', height: '8px', borderRadius: '50%',
-                        background: DISC_COLOR[s.discipline] || 'var(--text-muted)',
-                        flexShrink: 0,
-                      }} />
-                      <span style={{ color: DISC_COLOR[s.discipline] }}>
-                        {DISC_LABEL[s.discipline] || s.discipline}
-                      </span>
-                      <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                        {s.target_duration}m
-                      </span>
-                    </div>
-                    {s.importance === 'key' && (
-                      <div style={{ fontSize: '10px', color: 'var(--accent-blue)', marginLeft: '14px' }}>Priority</div>
-                    )}
-                    {s.importance === 'supporting' && (
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '14px' }}>Base</div>
-                    )}
-                    {s.importance === 'optional' && (
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '14px', opacity: 0.6 }}>Optional</div>
-                    )}
-                  </div>
-                ))
-              )}
-
-              {/* Expanded detail */}
-              {expanded === dateStr && planned.length > 0 && (
-                <div style={{
-                  marginTop: '10px',
-                  paddingTop: '10px',
-                  borderTop: '1px solid var(--border)',
-                }}>
-                  {planned.map(s => {
+          {/* Full-width detail panel */}
+          {expanded && (() => {
+            const day = days.find(d => d.dateStr === expanded)
+            if (!day || day.planned.length === 0) return null
+            return (
+              <div className="card" style={{ marginTop: '16px', padding: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <h3 style={{ margin: 0, fontSize: '15px' }}>{formatHeaderDate(day.date)} — Workout Detail</h3>
+                  <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 10px' }} onClick={() => setExpanded(null)}>Close</button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px' }}>
+                  {day.planned.map(s => {
                     const desc = WORKOUT_DESCRIPTIONS[`${s.discipline}:${s.type}`]
                     const color = DISC_COLOR[s.discipline] || 'var(--text-muted)'
                     return (
-                      <div key={`exp-${s.id}`} style={{
-                        marginBottom: '14px',
-                        padding: '10px 12px',
+                      <div key={`detail-${s.id}`} style={{
+                        padding: '14px 16px',
                         background: 'rgba(255,255,255,0.03)',
-                        borderRadius: '8px',
-                        borderLeft: `3px solid ${color}`,
+                        borderRadius: '10px',
+                        borderLeft: `4px solid ${color}`,
                       }}>
-                        <div style={{ fontWeight: 600, fontSize: '12px', color, marginBottom: '6px' }}>
-                          {DISC_LABEL[s.discipline] || s.discipline} · {s.target_duration}min · Zone {s.target_intensity_zone}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                          <span style={{ fontWeight: 700, fontSize: '13px', color }}>
+                            {DISC_LABEL[s.discipline] || s.discipline}
+                          </span>
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                            {s.target_duration} min · Zone {s.target_intensity_zone}
+                          </span>
+                          {s.importance === 'key' && <span className="badge badge-blue">Priority</span>}
+                          {s.importance === 'supporting' && <span className="badge" style={{ background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)' }}>Base</span>}
+                          {s.importance === 'optional' && <span className="badge" style={{ background: 'rgba(148,163,184,0.08)', color: 'var(--text-muted)' }}>Optional</span>}
                         </div>
                         {desc ? (
                           <>
-                            <div style={{ fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500, marginBottom: '4px' }}>
-                              Goal: {desc.goal}
+                            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                              🎯 {desc.goal}
                             </div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.7 }}>
                               {desc.execution}
                             </div>
                           </>
                         ) : (
-                          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                            {s.purpose} · {s.type}
+                          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                            {s.purpose}
+                          </div>
+                        )}
+                        {day.done.length > 0 && (
+                          <div style={{ fontSize: '11px', color: 'var(--accent-green)', marginTop: '10px' }}>
+                            ✓ Logged
                           </div>
                         )}
                       </div>
                     )
                   })}
-                  {done.length > 0 && (
-                    <div style={{ fontSize: '11px', color: 'var(--accent-green)', marginTop: '4px' }}>
-                      ✓ {done.length} session{done.length > 1 ? 's' : ''} logged
-                    </div>
-                  )}
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
+              </div>
+            )
+          })()}
+        </>
       )}
     </div>
   )
