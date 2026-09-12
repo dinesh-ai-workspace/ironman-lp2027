@@ -34,12 +34,12 @@ const WORKOUT_DESCRIPTIONS = {
     execution: 'Hold Zone 2 heart rate throughout — conversational pace. Eat 40–60g carbs/hr to train the gut. No surges. This is your bread-and-butter training ride.',
   },
   'bike:cadence_and_terrain': {
-    goal: 'Adapt to Lake Placid's rolling terrain and build torque',
+    goal: "Adapt to Lake Placid's rolling terrain and build torque",
     execution: 'Include 3–4 × 8-min low-cadence (55–65 rpm) efforts on climbs at Zone 3 power. Recover on descents. Practice shifting and gear selection on varied grades.',
   },
   'bike:hill_climbing': {
-    goal: 'Build climbing-specific strength for LP's two loops',
-    execution: 'Target sustained climbs at Zone 3–4. Practise seated climbing at 70–80 rpm and standing efforts on short punchy sections. Fuel every 20 min — don't wait for hunger.',
+    goal: "Build climbing-specific strength for LP's two loops",
+    execution: "Target sustained climbs at Zone 3–4. Practise seated climbing at 70–80 rpm and standing efforts on short punchy sections. Fuel every 20 min — don't wait for hunger.",
   },
   'bike:long_ride': {
     goal: 'Build multi-hour endurance and fueling discipline',
@@ -52,19 +52,19 @@ const WORKOUT_DESCRIPTIONS = {
   // ── Run ───────────────────────────────────────────────────────────────────
   'run:easy': {
     goal: 'Aerobic maintenance and active recovery',
-    execution: 'Zone 2 heart rate — slow enough to hold a full conversation. If you feel the urge to speed up, slow down. This run supports the week's hard sessions, not the other way around.',
+    execution: "Zone 2 heart rate — slow enough to hold a full conversation. If you feel the urge to speed up, slow down. This run supports the week's hard sessions, not the other way around.",
   },
   'run:long_run': {
     goal: 'Build run durability and glycogen efficiency',
-    execution: 'Start Zone 2, finish Zone 2. Do not drift into Zone 3 even when fatigue sets in — that's the adaptation. Fuel every 30–40 min. Walk breaks are fine early in the plan.',
+    execution: "Start Zone 2, finish Zone 2. Do not drift into Zone 3 even when fatigue sets in — that's the adaptation. Fuel every 30–40 min. Walk breaks are fine early in the plan.",
   },
   'run:recovery': {
     goal: 'Flush fatigue and maintain run frequency',
-    execution: 'Truly easy — slower than you think necessary. Zone 1 heart rate. 20–35 min max. If legs are heavy from yesterday's long bike, shorten or skip entirely.',
+    execution: "Truly easy — slower than you think necessary. Zone 1 heart rate. 20–35 min max. If legs are heavy from yesterday's long bike, shorten or skip entirely.",
   },
   'run:brick_run': {
     goal: 'Train the bike-to-run transition and overcome dead-leg sensation',
-    execution: 'Change shoes quickly, start running immediately. First 5–8 min will feel awful — that's normal. Settle into Zone 2. Practise your T2 nutrition cue: start fuelling within 2 min of running.',
+    execution: "Change shoes quickly, start running immediately. First 5–8 min will feel awful — that's normal. Settle into Zone 2. Practise your T2 nutrition cue: start fuelling within 2 min of running.",
   },
   // ── Strength ──────────────────────────────────────────────────────────────
   'strength:foundation_strength': {
