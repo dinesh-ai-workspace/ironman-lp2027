@@ -162,7 +162,13 @@ export default function Calendar() {
                       </span>
                     </div>
                     {s.importance === 'key' && (
-                      <div style={{ fontSize: '10px', color: 'var(--accent-blue)', marginLeft: '14px' }}>KEY</div>
+                      <div style={{ fontSize: '10px', color: 'var(--accent-blue)', marginLeft: '14px' }}>Priority</div>
+                    )}
+                    {s.importance === 'supporting' && (
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '14px' }}>Base</div>
+                    )}
+                    {s.importance === 'optional' && (
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '14px', opacity: 0.6 }}>Optional</div>
                     )}
                   </div>
                 ))
