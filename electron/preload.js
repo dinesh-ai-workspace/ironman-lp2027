@@ -44,4 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // File dialog
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
+
+  // External links
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 })

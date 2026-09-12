@@ -1,6 +1,6 @@
 'use strict'
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 
@@ -1054,6 +1054,11 @@ ipcMain.handle('nutrition:import-mfp', (event, filePath) => {
   } catch (err) {
     return { error: err.message }
   }
+})
+
+// ─── IPC: shell:openExternal ──────────────────────────────────────────────
+ipcMain.handle('shell:openExternal', (event, url) => {
+  shell.openExternal(url)
 })
 
 // ─── IPC: dialog:openFile ─────────────────────────────────────────────────

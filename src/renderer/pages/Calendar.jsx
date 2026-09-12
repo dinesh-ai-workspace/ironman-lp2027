@@ -10,6 +10,28 @@ const DISC_COLOR = {
 
 const DISC_LABEL = { swim: 'Swim', bike: 'Bike', run: 'Run', strength: 'Strength', race: 'Race', other: 'Other' }
 
+// YouTube search URLs — always resolve to current, relevant content
+const WORKOUT_LINKS = {
+  'swim:technique':               { label: 'Watch: Swim Drills',          url: 'https://www.youtube.com/results?search_query=triathlon+swim+technique+drills' },
+  'swim:aerobic_intervals':       { label: 'Watch: Swim Intervals',       url: 'https://www.youtube.com/results?search_query=triathlon+swim+aerobic+intervals+sets' },
+  'swim:endurance':               { label: 'Watch: Open Water Tips',      url: 'https://www.youtube.com/results?search_query=open+water+triathlon+swim+endurance+tips' },
+  'bike:technique_indoor':        { label: 'Watch: Cadence Drills',       url: 'https://www.youtube.com/results?search_query=cycling+cadence+drills+indoor+trainer+triathlon' },
+  'bike:endurance_z2':            { label: 'Watch: Zone 2 Training',      url: 'https://www.youtube.com/results?search_query=zone+2+cycling+training+explanation+triathlon' },
+  'bike:cadence_and_terrain':     { label: 'Watch: Low Cadence & Hills',  url: 'https://www.youtube.com/results?search_query=low+cadence+cycling+torque+hill+training' },
+  'bike:hill_climbing':           { label: 'Watch: Climbing Technique',   url: 'https://www.youtube.com/results?search_query=cycling+hill+climbing+technique+seated+standing' },
+  'bike:long_ride':               { label: 'Watch: Long Ride Fueling',    url: 'https://www.youtube.com/results?search_query=ironman+long+ride+fueling+nutrition+strategy' },
+  'bike:race_simulation':         { label: 'Watch: Race Simulation',      url: 'https://www.youtube.com/results?search_query=ironman+bike+race+simulation+training+ride' },
+  'run:easy':                     { label: 'Watch: Zone 2 Running',       url: 'https://www.youtube.com/results?search_query=zone+2+running+pace+triathlon+easy+effort' },
+  'run:long_run':                 { label: 'Watch: Long Run Tips',        url: 'https://www.youtube.com/results?search_query=triathlon+long+run+training+tips+ironman' },
+  'run:recovery':                 { label: 'Watch: Recovery Run',         url: 'https://www.youtube.com/results?search_query=recovery+run+triathlon+how+easy+should+it+be' },
+  'run:brick_run':                { label: 'Watch: Brick Run Tips',       url: 'https://www.youtube.com/results?search_query=brick+run+triathlon+T2+transition+tips' },
+  'strength:foundation_strength': { label: 'Watch: Foundation Strength',  url: 'https://www.youtube.com/results?search_query=triathlon+foundation+strength+exercises+glutes+core' },
+  'strength:in_season_maintenance':{ label: 'Watch: In-Season Strength',  url: 'https://www.youtube.com/results?search_query=triathlon+in+season+strength+maintenance+workout' },
+  'race:ironman':                 { label: 'Watch: Ironman Race Tips',    url: 'https://www.youtube.com/results?search_query=ironman+triathlon+race+day+strategy+tips' },
+  'race:half_ironman_tune_up':    { label: 'Watch: Half Ironman Tips',    url: 'https://www.youtube.com/results?search_query=half+ironman+race+tips+pacing+nutrition' },
+  'race:sprint_olympic_tune_up':  { label: 'Watch: Sprint Tri Tips',      url: 'https://www.youtube.com/results?search_query=sprint+olympic+triathlon+race+tips+pacing' },
+}
+
 const WORKOUT_DESCRIPTIONS = {
   // ── Swim ──────────────────────────────────────────────────────────────────
   'swim:technique': {
@@ -297,9 +319,21 @@ export default function Calendar() {
                             <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>
                               🎯 {desc.goal}
                             </div>
-                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.7 }}>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.7, marginBottom: '10px' }}>
                               {desc.execution}
                             </div>
+                            {WORKOUT_LINKS[`${s.discipline}:${s.type}`] && (
+                              <button
+                                className="btn btn-secondary"
+                                style={{ fontSize: '11px', padding: '4px 10px' }}
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  window.electronAPI.openExternal(WORKOUT_LINKS[`${s.discipline}:${s.type}`].url)
+                                }}
+                              >
+                                ▶ {WORKOUT_LINKS[`${s.discipline}:${s.type}`].label}
+                              </button>
+                            )}
                           </>
                         ) : (
                           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
