@@ -7,7 +7,7 @@
 /**
  * Ramp table: max long-ride duration (minutes) by week number.
  * Used by getMaxLongBikeDuration (progression.js) and wouldExceedBikeCap.
- * Week 38 = simulation ride (345 min). Week 39 = unwind (120 min).
+ * Week 39 = simulation ride (345 min). Week 40 = step-back recovery. Week 41 = unwind (120 min).
  */
 const BIKE_RAMP_TABLE = {
   1:  23,
@@ -20,8 +20,8 @@ const BIKE_RAMP_TABLE = {
   32: 285,
   34: 300,
   36: 315,
-  38: 345,
-  39: 120,
+  39: 345,
+  41: 120,
 };
 
 /**
@@ -169,10 +169,10 @@ function wouldExceedBikeCap(durationMin, weekNum, allBikeSessions) {
   // Strictly exceeds the ramp ceiling — always a violation regardless of week.
   if (durationMin > maxAllowed) return true;
 
-  // Simulation-ride restriction: only one 330+ min ride is allowed, and only at week 38.
-  // Week 36 ramp max is 315min, week 37 interpolates to ~330min — cap non-sim weeks below 330.
+  // Simulation-ride restriction: only one 330+ min ride is allowed, and only at week 39.
+  // Weeks 37-38 interpolate toward 345 but are capped at 325 by the scheduler.
   if (weekNum >= 37 && durationMin >= 330) {
-    if (weekNum !== 38) return true;
+    if (weekNum !== 39) return true;
     const existingSimRide = allBikeSessions.some(s => s.durationMin >= 330);
     if (existingSimRide) return true;
   }

@@ -4,15 +4,15 @@
  * Default phase templates — stored as plain objects so they can be overridden
  * or persisted to a DB table. Never hardcoded constants.
  *
- * Total non-Foundation weeks = 12 (aerobic_base) + 10 (build) + 5 (peak) + 5 (taper) = 32.
+ * Total non-Foundation weeks = 12 (aerobic_base) + 10 (build) + 6 (peak) + 4 (taper) = 32.
  * Foundation absorbs any extra weeks (totalWeeks - 32). Minimum total = 32 weeks.
  */
 const DEFAULT_PHASE_TEMPLATES = [
   { phase: 'foundation',   phaseName: 'Foundation',               weekCount: 12, hoursMin: 6.5,  hoursMax: 8.5  },
   { phase: 'aerobic_base', phaseName: 'Aerobic Base',             weekCount: 12, hoursMin: 8.5,  hoursMax: 11   },
   { phase: 'build',        phaseName: 'Build / Hill Specificity', weekCount: 10, hoursMin: 10.5, hoursMax: 13.5 },
-  { phase: 'peak',         phaseName: 'Peak',                     weekCount: 5,  hoursMin: 11,   hoursMax: 14   },
-  { phase: 'taper',        phaseName: 'Taper',                    weekCount: 5,  hoursMin: 3.5,  hoursMax: 8    },
+  { phase: 'peak',         phaseName: 'Peak',                     weekCount: 6,  hoursMin: 11,   hoursMax: 14   },
+  { phase: 'taper',        phaseName: 'Taper',                    weekCount: 4,  hoursMin: 3.5,  hoursMax: 8    },
 ];
 
 /**

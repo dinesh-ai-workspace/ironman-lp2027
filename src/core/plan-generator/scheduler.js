@@ -184,9 +184,9 @@ function scheduleWeek(config) {
     }
 
     // Non-race taper weeks: explicit volumes.
-    // wk1=120min bike+run, wk2=90+90, wk3=60+60, wk4=60+60 (buffer repeat), then race week.
-    const taperBikeDurations = [120, 90, 60, 60];
-    const taperRunDurations  = [120, 90, 60, 60];
+    // wk1=120min bike+run, wk2=90+90, wk3=60+60, then race week.
+    const taperBikeDurations = [120, 90, 60];
+    const taperRunDurations  = [120, 90, 60];
     const taperSwimFactors   = [0.75, 0.60, 0.45];
 
     const swimBase = Math.min(swimDuration.max, swimDuration.min + 10);
@@ -335,9 +335,11 @@ function scheduleWeek(config) {
   // Saturday: Long Bike — duration comes directly from the ramp table.
   const longBikeMax = getMaxLongBikeDuration(weekNum);
 
-  // Simulation ride: one 345-min ride at week 38 only (second-to-last peak week).
+  // Simulation ride: one 345-min ride at the third-to-last peak week.
+  // Using weekEnd - 2 keeps it off step-back weeks (every 4th) and leaves
+  // weekEnd - 1 as a step-back recovery and weekEnd as the unwind (120 min).
   const peakBlock = phaseBlocks.find(b => b.phase === 'peak');
-  const simRideWeeks = peakBlock ? [peakBlock.weekEnd - 1] : [38];
+  const simRideWeeks = peakBlock ? [peakBlock.weekEnd - 2] : [39];
 
   const allBikeSessions = allScheduledSessions
     .filter(s => s.discipline === 'bike')
