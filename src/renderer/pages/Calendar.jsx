@@ -8,7 +8,87 @@ const DISC_COLOR = {
   other: 'var(--text-muted)',
 }
 
-const DISC_LABEL = { swim: 'Swim', bike: 'Bike', run: 'Run', strength: 'Strength', other: 'Other' }
+const DISC_LABEL = { swim: 'Swim', bike: 'Bike', run: 'Run', strength: 'Strength', race: 'Race', other: 'Other' }
+
+const WORKOUT_DESCRIPTIONS = {
+  // ── Swim ──────────────────────────────────────────────────────────────────
+  'swim:technique': {
+    goal: 'Build efficient stroke mechanics',
+    execution: 'Focus on catch, pull, and rotation. Use drills: fingertip drag, catch-up, 6-kick switch. Keep effort easy (Zone 1–2). Quality over distance.',
+  },
+  'swim:aerobic_intervals': {
+    goal: 'Build aerobic engine and pace awareness',
+    execution: 'Main set: 4–6 × 200–400m at a comfortably hard effort (Zone 3) with 20–30s rest. Warm up and cool down easy. Aim for consistent splits.',
+  },
+  'swim:endurance': {
+    goal: 'Extend time in the water at race-sustainable effort',
+    execution: 'Continuous or broken swims at Zone 2 pace. Practice bilateral breathing and sighting every 10 strokes. Simulate open-water conditions where possible.',
+  },
+  // ── Bike ──────────────────────────────────────────────────────────────────
+  'bike:technique_indoor': {
+    goal: 'Develop pedalling efficiency and bike feel',
+    execution: 'Trainer session. Alternate 5-min blocks of 90+ rpm cadence drills with single-leg pedalling. Keep power low (Zone 1–2). Focus on smooth circles, not mashing.',
+  },
+  'bike:endurance_z2': {
+    goal: 'Build aerobic base and fat oxidation',
+    execution: 'Hold Zone 2 heart rate throughout — conversational pace. Eat 40–60g carbs/hr to train the gut. No surges. This is your bread-and-butter training ride.',
+  },
+  'bike:cadence_and_terrain': {
+    goal: 'Adapt to Lake Placid's rolling terrain and build torque',
+    execution: 'Include 3–4 × 8-min low-cadence (55–65 rpm) efforts on climbs at Zone 3 power. Recover on descents. Practice shifting and gear selection on varied grades.',
+  },
+  'bike:hill_climbing': {
+    goal: 'Build climbing-specific strength for LP's two loops',
+    execution: 'Target sustained climbs at Zone 3–4. Practise seated climbing at 70–80 rpm and standing efforts on short punchy sections. Fuel every 20 min — don't wait for hunger.',
+  },
+  'bike:long_ride': {
+    goal: 'Build multi-hour endurance and fueling discipline',
+    execution: 'Steady Zone 2 effort. Execute your full race-nutrition plan: 60–80g carbs/hr, 500–750ml fluid/hr, electrolytes. Note how your body responds — adjust on the next ride.',
+  },
+  'bike:race_simulation': {
+    goal: 'Full dress rehearsal of race-day bike leg',
+    execution: 'Ride LP course profile if possible. Execute exact race-day nutrition and pacing. Hold race power — resist the urge to push early. This is the most important training day of the plan.',
+  },
+  // ── Run ───────────────────────────────────────────────────────────────────
+  'run:easy': {
+    goal: 'Aerobic maintenance and active recovery',
+    execution: 'Zone 2 heart rate — slow enough to hold a full conversation. If you feel the urge to speed up, slow down. This run supports the week's hard sessions, not the other way around.',
+  },
+  'run:long_run': {
+    goal: 'Build run durability and glycogen efficiency',
+    execution: 'Start Zone 2, finish Zone 2. Do not drift into Zone 3 even when fatigue sets in — that's the adaptation. Fuel every 30–40 min. Walk breaks are fine early in the plan.',
+  },
+  'run:recovery': {
+    goal: 'Flush fatigue and maintain run frequency',
+    execution: 'Truly easy — slower than you think necessary. Zone 1 heart rate. 20–35 min max. If legs are heavy from yesterday's long bike, shorten or skip entirely.',
+  },
+  'run:brick_run': {
+    goal: 'Train the bike-to-run transition and overcome dead-leg sensation',
+    execution: 'Change shoes quickly, start running immediately. First 5–8 min will feel awful — that's normal. Settle into Zone 2. Practise your T2 nutrition cue: start fuelling within 2 min of running.',
+  },
+  // ── Strength ──────────────────────────────────────────────────────────────
+  'strength:foundation_strength': {
+    goal: 'Build injury-resistant base strength and hip/core stability',
+    execution: 'Focus: glute bridges, single-leg deadlifts, clamshells, plank variations, hip flexor mobility. 2–3 sets × 10–15 reps. Slow and controlled. No heavy loading yet.',
+  },
+  'strength:in_season_maintenance': {
+    goal: 'Maintain neuromuscular strength without adding fatigue',
+    execution: 'Short, targeted session. Single-leg squats, Romanian deadlifts, lateral band walks, core stability. 2 sets × 8–10 reps, moderate load. Done in 30–35 min — get in, get out.',
+  },
+  // ── Race ──────────────────────────────────────────────────────────────────
+  'race:ironman': {
+    goal: 'IRONMAN Lake Placid 2027 — race day',
+    execution: 'Swim 2.4mi → Bike 112mi → Run 26.2mi. Trust your training. Execute the nutrition plan you have practised all year. The first 6 hours are setup — the last 2 hours are the race.',
+  },
+  'race:half_ironman_tune_up': {
+    goal: 'Race-effort tune-up: test pacing and nutrition under pressure',
+    execution: 'Treat as a hard training day, not an all-out race. Practise race-day routine: warm-up, transitions, nutrition. Note what works and what to fix before the A-race.',
+  },
+  'race:sprint_olympic_tune_up': {
+    goal: 'Speed work in a race context — sharpen VO2 and transitions',
+    execution: 'Race hard but controlled. Use it to practise T1/T2 efficiency and open-water swimming in a race environment. Debrief your pacing and fueling afterward.',
+  },
+}
 
 function getMondayOf(date) {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
@@ -181,18 +261,39 @@ export default function Calendar() {
                   paddingTop: '10px',
                   borderTop: '1px solid var(--border)',
                 }}>
-                  {planned.map(s => (
-                    <div key={`exp-${s.id}`} style={{ marginBottom: '10px' }}>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                        {s.purpose}
+                  {planned.map(s => {
+                    const desc = WORKOUT_DESCRIPTIONS[`${s.discipline}:${s.type}`]
+                    const color = DISC_COLOR[s.discipline] || 'var(--text-muted)'
+                    return (
+                      <div key={`exp-${s.id}`} style={{
+                        marginBottom: '14px',
+                        padding: '10px 12px',
+                        background: 'rgba(255,255,255,0.03)',
+                        borderRadius: '8px',
+                        borderLeft: `3px solid ${color}`,
+                      }}>
+                        <div style={{ fontWeight: 600, fontSize: '12px', color, marginBottom: '6px' }}>
+                          {DISC_LABEL[s.discipline] || s.discipline} · {s.target_duration}min · Zone {s.target_intensity_zone}
+                        </div>
+                        {desc ? (
+                          <>
+                            <div style={{ fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500, marginBottom: '4px' }}>
+                              Goal: {desc.goal}
+                            </div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                              {desc.execution}
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                            {s.purpose} · {s.type}
+                          </div>
+                        )}
                       </div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                        Zone {s.target_intensity_zone} · {s.type}
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                   {done.length > 0 && (
-                    <div style={{ fontSize: '11px', color: 'var(--accent-green)' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--accent-green)', marginTop: '4px' }}>
                       ✓ {done.length} session{done.length > 1 ? 's' : ''} logged
                     </div>
                   )}
