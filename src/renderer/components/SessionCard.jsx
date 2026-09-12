@@ -17,8 +17,9 @@ const DISCIPLINE_LABELS = {
 }
 
 function importanceBadge(importance) {
-  if (importance === 'key') return <span className="badge badge-blue">KEY</span>
-  if (importance === 'supporting') return <span className="badge" style={{ background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)' }}>Support</span>
+  if (importance === 'key') return <span className="badge badge-blue">Priority</span>
+  if (importance === 'supporting') return <span className="badge" style={{ background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)' }}>Base</span>
+  if (importance === 'optional') return <span className="badge" style={{ background: 'rgba(148,163,184,0.08)', color: 'var(--text-muted)' }}>Optional</span>
   return null
 }
 
