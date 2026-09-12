@@ -183,10 +183,10 @@ function scheduleWeek(config) {
       return sessions;
     }
 
-    // Non-race taper weeks: explicit volumes matching the 43-week plan.
-    // Taper wk1=120min bike+120min run, wk2=90+90, wk3=60+60.
-    const taperBikeDurations = [120, 90, 60];
-    const taperRunDurations  = [120, 90, 60];
+    // Non-race taper weeks: explicit volumes.
+    // wk1=120min bike+run, wk2=90+90, wk3=60+60, wk4=60+60 (buffer repeat), then race week.
+    const taperBikeDurations = [120, 90, 60, 60];
+    const taperRunDurations  = [120, 90, 60, 60];
     const taperSwimFactors   = [0.75, 0.60, 0.45];
 
     const swimBase = Math.min(swimDuration.max, swimDuration.min + 10);

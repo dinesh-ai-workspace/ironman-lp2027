@@ -54,10 +54,9 @@ function createWindow() {
 
 // ─── First-launch plan initialization ─────────────────────────────────────
 function initializePlan() {
-  // Plan start is fixed: Sep 28, 2026 (Monday). Race: Jul 25, 2027 = 43 weeks.
-  // Supersede any legacy active plan so a fresh one is always generated from
-  // the correct start date and updated ramp tables.
-  const PLAN_START = '2026-09-28'
+  // Plan start: Sep 14, 2026 (Monday). Race: Jul 25, 2027 = 45 weeks.
+  // Two buffer weeks before the Sep 28 hard-training block.
+  const PLAN_START = '2026-09-14'
   const existingPlan = db.prepare(
     "SELECT id, plan_start_date FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1"
   ).get()
@@ -67,14 +66,14 @@ function initializePlan() {
   // Supersede any stale active plan before inserting the new one.
   db.prepare("UPDATE plans SET status='superseded' WHERE status='active'").run()
 
-  const planStartDate   = new Date('2026-09-28T00:00:00Z')
+  const planStartDate   = new Date('2026-09-14T00:00:00Z')
   const athleteBirthDate = new Date('1980-01-15T00:00:00Z')
   const raceDate        = new Date('2027-07-25T00:00:00Z')
 
   try {
     const generated = generatePlan({ raceDate, planStartDate, athleteBirthDate })
     savePlan(db, generated)
-    console.log('[main] Plan generated: Sep 28 2026 → Jul 25 2027 (43 weeks).')
+    console.log('[main] Plan generated: Sep 14 2026 → Jul 25 2027 (45 weeks).')
   } catch (err) {
     console.error('[main] Failed to generate plan:', err)
   }
