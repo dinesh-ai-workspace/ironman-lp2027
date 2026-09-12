@@ -163,8 +163,10 @@ ipcMain.handle('plan:generate', (event, config) => {
 
 // ─── IPC: sessions:planned:list ───────────────────────────────────────────
 ipcMain.handle('sessions:planned:list', (event, filters = {}) => {
-  const conditions = ['1=1']
-  const params = []
+  // Always scope to the active plan to prevent duplicate rows from superseded plans.
+  const activePlan = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
+  const conditions = ['ps.plan_id = ?']
+  const params = [activePlan ? activePlan.id : -1]
 
   if (filters.weekStartDate) {
     conditions.push('ps.date >= ?')
@@ -199,10 +201,11 @@ ipcMain.handle('sessions:log', (event, session) => {
 
   // Auto-match to planned session if not provided
   if (!plannedSessionId && session.date && session.discipline) {
+    const activeForLog = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
     const candidates = db.prepare(`
       SELECT * FROM planned_sessions
-      WHERE date = ? AND discipline = ?
-    `).all(session.date, session.discipline)
+      WHERE plan_id = ? AND date = ? AND discipline = ?
+    `).all(activeForLog ? activeForLog.id : -1, session.date, session.discipline)
 
     if (candidates.length > 0 && session.duration) {
       const dur = parseInt(session.duration)
@@ -390,13 +393,14 @@ ipcMain.handle('stats:upcoming', (event, days) => {
   futureDate.setUTCDate(futureDate.getUTCDate() + numDays)
   const futureDateStr = futureDate.toISOString().slice(0, 10)
 
+  const activePlan2 = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
   return db.prepare(`
     SELECT ps.*, pb.phase, pb.phase_name
     FROM planned_sessions ps
     JOIN plan_blocks pb ON ps.block_id = pb.id
-    WHERE ps.date >= ? AND ps.date <= ?
+    WHERE ps.plan_id = ? AND ps.date >= ? AND ps.date <= ?
     ORDER BY ps.date, ps.discipline
-  `).all(today, futureDateStr)
+  `).all(activePlan2 ? activePlan2.id : -1, today, futureDateStr)
 })
 
 // ─── IPC: stats:readiness ─────────────────────────────────────────────────
@@ -460,8 +464,8 @@ ipcMain.handle('stats:progress', () => {
 
   const plannedCount = db.prepare(`
     SELECT COUNT(*) AS cnt FROM planned_sessions
-    WHERE date >= ? AND date <= ?
-  `).get(fourWeeksAgoStr, today)
+    WHERE plan_id = ? AND date >= ? AND date <= ?
+  `).get(activePlan ? activePlan.id : -1, fourWeeksAgoStr, today)
 
   const loggedCount = db.prepare(`
     SELECT COUNT(*) AS cnt FROM logged_sessions
