@@ -52,6 +52,32 @@ function createWindow() {
   return win
 }
 
+// ─── DB migrations ────────────────────────────────────────────────────────
+function runMigrations() {
+  const dwCols = db.prepare('PRAGMA table_info(daily_wellness)').all().map(c => c.name)
+  if (!dwCols.includes('body_weight_lb')) {
+    db.prepare('ALTER TABLE daily_wellness ADD COLUMN body_weight_lb REAL').run()
+  }
+  if (!dwCols.includes('hunger')) {
+    db.prepare('ALTER TABLE daily_wellness ADD COLUMN hunger TEXT').run()
+  }
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS weekly_fat_loss_checkins (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      week_start_date TEXT NOT NULL UNIQUE,
+      waist_in REAL,
+      strength_trend TEXT NOT NULL DEFAULT 'stable',
+      training_phase TEXT NOT NULL DEFAULT 'base',
+      notes TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    )
+  `).run()
+  const ciCols = db.prepare('PRAGMA table_info(weekly_fat_loss_checkins)').all().map(c => c.name)
+  if (!ciCols.includes('status')) {
+    db.prepare("ALTER TABLE weekly_fat_loss_checkins ADD COLUMN status TEXT NOT NULL DEFAULT 'green'").run()
+  }
+}
+
 // ─── First-launch plan initialization ─────────────────────────────────────
 function initializePlan() {
   // Plan start: Sep 14, 2026 (Monday). Race: Jul 25, 2027 = 45 weeks.
@@ -82,6 +108,7 @@ function initializePlan() {
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(() => {
   db = getDb(dbPath)
+  runMigrations()
   initializePlan()
 
   createWindow()
@@ -296,10 +323,10 @@ ipcMain.handle('wellness:save', (event, entry) => {
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO daily_wellness
       (date, sleep_hours, sleep_quality_1_5, fatigue_1_5, soreness_1_5,
-       pain_flag, pain_notes, motivation_1_5, notes)
+       pain_flag, pain_notes, motivation_1_5, notes, body_weight_lb, hunger)
     VALUES
       (@date, @sleep_hours, @sleep_quality_1_5, @fatigue_1_5, @soreness_1_5,
-       @pain_flag, @pain_notes, @motivation_1_5, @notes)
+       @pain_flag, @pain_notes, @motivation_1_5, @notes, @body_weight_lb, @hunger)
   `)
   const result = stmt.run({
     date: entry.date,
@@ -311,6 +338,8 @@ ipcMain.handle('wellness:save', (event, entry) => {
     pain_notes: entry.pain_notes || '',
     motivation_1_5: entry.motivation_1_5 !== undefined ? entry.motivation_1_5 : null,
     notes: entry.notes || '',
+    body_weight_lb: entry.body_weight_lb !== undefined ? entry.body_weight_lb : null,
+    hunger: entry.hunger || null,
   })
   return { id: result.lastInsertRowid }
 })
@@ -325,6 +354,353 @@ ipcMain.handle('wellness:history', (event, days) => {
   return db.prepare(
     'SELECT * FROM daily_wellness ORDER BY date DESC LIMIT ?'
   ).all(days || 14)
+})
+
+// ─── IPC: stoploss:log-weight ─────────────────────────────────────────────
+ipcMain.handle('stoploss:log-weight', (event, { date, weight }) => {
+  db.prepare(`
+    INSERT INTO daily_wellness (date, body_weight_lb)
+    VALUES (@date, @weight)
+    ON CONFLICT(date) DO UPDATE SET body_weight_lb = excluded.body_weight_lb
+  `).run({ date, weight })
+  return { ok: true }
+})
+
+// ─── IPC: stoploss:checkin:get ────────────────────────────────────────────
+ipcMain.handle('stoploss:checkin:get', (event, weekStartDate) => {
+  return db.prepare(
+    'SELECT * FROM weekly_fat_loss_checkins WHERE week_start_date = ?'
+  ).get(weekStartDate) || null
+})
+
+// ─── IPC: stoploss:checkin:save ───────────────────────────────────────────
+ipcMain.handle('stoploss:checkin:save', (event, entry) => {
+  db.prepare(`
+    INSERT INTO weekly_fat_loss_checkins (week_start_date, waist_in, strength_trend, training_phase, notes, status, updated_at)
+    VALUES (@week_start_date, @waist_in, @strength_trend, @training_phase, @notes, @status, @updated_at)
+    ON CONFLICT(week_start_date) DO UPDATE SET
+      waist_in = excluded.waist_in,
+      strength_trend = excluded.strength_trend,
+      training_phase = excluded.training_phase,
+      notes = excluded.notes,
+      status = excluded.status,
+      updated_at = excluded.updated_at
+  `).run({
+    week_start_date: entry.week_start_date,
+    waist_in: entry.waist_in || null,
+    strength_trend: entry.strength_trend || 'stable',
+    training_phase: entry.training_phase || 'base',
+    notes: entry.notes || '',
+    status: entry.status || 'green',
+    updated_at: new Date().toISOString(),
+  })
+  return { ok: true }
+})
+
+// ─── IPC: stoploss:weekly-check ───────────────────────────────────────────
+ipcMain.handle('stoploss:weekly-check', (event, weekStartDate) => {
+  function slDateAdd(dateStr, n) {
+    const d = new Date(dateStr + 'T00:00:00Z')
+    d.setUTCDate(d.getUTCDate() + n)
+    return d.toISOString().slice(0, 10)
+  }
+  function slAvg(arr) {
+    if (!arr.length) return null
+    return arr.reduce((a, b) => a + b, 0) / arr.length
+  }
+  // Bounded parsers — cap at 3 digits to prevent e.g. "HRV: 420" from a malformed note
+  function parseHRV(notes) {
+    const m = notes && notes.match(/HRV:\s*(\d{1,3})\b/i)
+    return m ? parseInt(m[1]) : null
+  }
+  function parseRHR(notes) {
+    const m = notes && notes.match(/RHR:\s*(\d{1,3})\b/i)
+    return m ? parseInt(m[1]) : null
+  }
+
+  if (!weekStartDate) {
+    const now = new Date()
+    const dow = now.getUTCDay()
+    const diff = dow === 0 ? -6 : 1 - dow
+    now.setUTCDate(now.getUTCDate() + diff)
+    weekStartDate = now.toISOString().slice(0, 10)
+  }
+
+  const wEnd      = slDateAdd(weekStartDate, 6)
+  const lwStart   = slDateAdd(weekStartDate, -7)
+  const lwEnd     = slDateAdd(weekStartDate, -1)
+  const llStart   = slDateAdd(weekStartDate, -14)  // two weeks ago
+  const llEnd     = slDateAdd(weekStartDate, -8)
+  const fw28Start = slDateAdd(weekStartDate, -28)
+
+  const checkin = db.prepare('SELECT * FROM weekly_fat_loss_checkins WHERE week_start_date = ?').get(weekStartDate)
+  const phase = checkin?.training_phase || 'base'
+
+  // ── Signal A1: Weight loss too fast ──────────────────────────────────────
+  const twWeights = db.prepare(
+    'SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL'
+  ).all(weekStartDate, wEnd).map(r => r.body_weight_lb)
+  const lwWeights = db.prepare(
+    'SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL'
+  ).all(lwStart, lwEnd).map(r => r.body_weight_lb)
+  const thisAvgWeight = slAvg(twWeights)
+  const lastAvgWeight = slAvg(lwWeights)
+  const weeklyChange  = thisAvgWeight != null && lastAvgWeight != null ? thisAvgWeight - lastAvgWeight : null
+  const lossRate      = weeklyChange != null ? Math.round(-weeklyChange * 100) / 100 : null
+  // Require ≥4 readings in each week — fewer means the rate is noise, not signal
+  const weightConfidence = twWeights.length >= 6 ? 'full' : twWeights.length >= 4 ? 'moderate' : 'insufficient'
+  const weightSignal = weightConfidence !== 'insufficient' && lwWeights.length >= 4 && lossRate != null && lossRate > 1
+
+  // Persistence check: was weight also dropping fast the week before last?
+  // Used to distinguish a genuine 2-week trend from a one-week glycogen/water anomaly.
+  const llWeights     = db.prepare(
+    'SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL'
+  ).all(llStart, llEnd).map(r => r.body_weight_lb)
+  const llAvgWeight   = slAvg(llWeights)
+  const lastWeekChange = lastAvgWeight != null && llAvgWeight != null ? lastAvgWeight - llAvgWeight : null
+  const lastWeekLossRate = lastWeekChange != null ? Math.round(-lastWeekChange * 100) / 100 : null
+  const weightFastPersisting = lastWeekLossRate != null && lastWeekLossRate > 1
+    && lwWeights.length >= 4 && llWeights.length >= 4
+
+  // ── Signal A2: Persistent hunger ─────────────────────────────────────────
+  const hungryDays = db.prepare(
+    "SELECT COUNT(*) as cnt FROM daily_wellness WHERE date >= ? AND date <= ? AND hunger IN ('elevated','excessive')"
+  ).get(weekStartDate, wEnd).cnt
+  const hungerSignal = hungryDays >= 4
+
+  // ── Signal B1: Rising fatigue (RHR trending up 3+ consecutive days) ──────
+  const rhrRows = db.prepare(
+    'SELECT date, notes FROM daily_wellness WHERE date >= ? AND date <= ? ORDER BY date ASC'
+  ).all(weekStartDate, wEnd)
+  const rhrSeries = rhrRows.map(r => ({ date: r.date, rhr: parseRHR(r.notes) })).filter(r => r.rhr != null)
+  let consecRising = 0, maxConsec = 0
+  for (let i = 1; i < rhrSeries.length; i++) {
+    consecRising = rhrSeries[i].rhr > rhrSeries[i-1].rhr ? consecRising + 1 : 0
+    maxConsec = Math.max(maxConsec, consecRising)
+  }
+  // Require ≥3 valid RHR readings before firing — sparse data shouldn't trigger
+  const fatigueSignal = rhrSeries.length >= 3 && maxConsec >= 2
+
+  // ── Signal B2: HRV declining (>5% below prior week avg) ──────────────────
+  const twHRV = db.prepare('SELECT notes FROM daily_wellness WHERE date >= ? AND date <= ?').all(weekStartDate, wEnd)
+    .map(r => parseHRV(r.notes)).filter(v => v != null)
+  const lwHRV = db.prepare('SELECT notes FROM daily_wellness WHERE date >= ? AND date <= ?').all(lwStart, lwEnd)
+    .map(r => parseHRV(r.notes)).filter(v => v != null)
+  const thisHRVAvg = slAvg(twHRV)
+  const lastHRVAvg = slAvg(lwHRV)
+  // Require ≥4 valid days in each window — a 5% gap from sparse data is normal variation
+  const hrvSignal = twHRV.length >= 4 && lwHRV.length >= 4 && thisHRVAvg != null && lastHRVAvg != null
+    && thisHRVAvg < lastHRVAvg * 0.95
+
+  // ── Signal B3: Motivation declining ──────────────────────────────────────
+  const lowMotDays = db.prepare(
+    'SELECT COUNT(*) as cnt FROM daily_wellness WHERE date >= ? AND date <= ? AND motivation_1_5 IS NOT NULL AND motivation_1_5 <= 2'
+  ).get(weekStartDate, wEnd).cnt
+  const motivationDays = db.prepare(
+    'SELECT COUNT(*) as cnt FROM daily_wellness WHERE date >= ? AND date <= ? AND motivation_1_5 IS NOT NULL'
+  ).get(weekStartDate, wEnd).cnt
+  const motivationSignal = lowMotDays >= 4
+
+  // ── Signal C1: Strength declining (manual) ────────────────────────────────
+  const strengthSignal = checkin?.strength_trend === 'declining'
+
+  // ── Signal C2: Workouts unusually hard (RPE >15% above 4-wk trailing avg) ─
+  const twRPERows = db.prepare(
+    'SELECT rpe FROM logged_sessions WHERE date >= ? AND date <= ? AND rpe IS NOT NULL'
+  ).all(weekStartDate, wEnd)
+  const trailRPERow = db.prepare(
+    'SELECT AVG(rpe) as avg, COUNT(*) as cnt FROM logged_sessions WHERE date >= ? AND date <= ? AND rpe IS NOT NULL'
+  ).get(fw28Start, lwEnd)
+  // Require ≥3 sessions in current week and ≥3 in trailing period — one hard session ≠ pattern
+  const thisRPEAvg = twRPERows.length >= 3 ? slAvg(twRPERows.map(r => r.rpe)) : null
+  const trailRPE   = trailRPERow.cnt >= 3 ? trailRPERow.avg : null
+  const rpeSignal  = thisRPEAvg != null && trailRPE != null && thisRPEAvg > trailRPE * 1.15
+
+  // ── Signals map ───────────────────────────────────────────────────────────
+  const signals = {
+    weight_too_fast:     weightSignal,
+    persistent_hunger:   hungerSignal,
+    rising_fatigue:      fatigueSignal,
+    hrv_declining:       !!hrvSignal,
+    strength_declining:  !!strengthSignal,
+    workouts_hard:       !!rpeSignal,
+    motivation_declining: motivationSignal,
+  }
+
+  // ── Domain grouping ───────────────────────────────────────────────────────
+  // A=Energy deficit  B=Recovery  C=Training performance
+  const SIGNAL_DOMAINS = {
+    weight_too_fast:     'A',
+    persistent_hunger:   'A',
+    rising_fatigue:      'B',
+    hrv_declining:       'B',
+    motivation_declining:'B',
+    workouts_hard:       'C',
+    strength_declining:  'C',
+  }
+  const activeSignals = Object.entries(signals).filter(([, v]) => v).map(([k]) => k)
+  const activeCount   = activeSignals.length
+  const activeDomains = [...new Set(activeSignals.map(s => SIGNAL_DOMAINS[s]))]
+  const activeDomainCount = activeDomains.length
+
+  // ── Confidence scoring (5 data streams) ──────────────────────────────────
+  const dataStreams = {
+    weight:     weightConfidence !== 'insufficient',
+    hrv:        twHRV.length >= 4,
+    rhr:        rhrSeries.length >= 3,
+    rpe:        twRPERows.length >= 3,
+    motivation: motivationDays >= 4,
+  }
+  const availableStreams = Object.values(dataStreams).filter(Boolean).length
+  const confidence = availableStreams >= 4 ? 'high' : availableStreams >= 2 ? 'moderate' : 'low'
+
+  // ── Status logic (domain-aware, persistence-gated) ────────────────────────
+  let status = 'green'
+  let statusReason = ''
+
+  if (signals.strength_declining && signals.weight_too_fast) {
+    if (weightFastPersisting) {
+      // Red only when weight has been fast for ≥2 consecutive weeks — rules out glycogen/water spike
+      status = 'red'
+      statusReason = 'Strength declining with weight loss too fast for 2+ weeks'
+    } else {
+      // First week of the combo — watch, don't act yet
+      status = 'yellow'
+      statusReason = 'Strength declining with fast weight loss — monitoring (1 week)'
+    }
+  } else if (activeCount >= 3 && activeDomainCount >= 2) {
+    // 3+ signals spanning at least 2 independent domains
+    status = 'red'
+    statusReason = `${activeCount} signals across ${activeDomainCount} domains`
+  } else if (activeDomainCount >= 2) {
+    // Signals from different domains — not correlated noise
+    status = 'yellow'
+    statusReason = `Signals in domains: ${activeDomains.join(', ')}`
+  } else if (signals.weight_too_fast) {
+    // High-priority solo energy signal
+    status = 'yellow'
+    statusReason = 'Weight loss exceeding safe rate'
+  } else if (activeCount >= 2) {
+    // 2+ signals in same domain (e.g. HRV + RHR both Recovery) — likely one root cause, watch not act
+    status = 'yellow'
+    statusReason = 'Multiple correlated recovery signals'
+  }
+  // 0 or 1 non-weight signal → green
+
+  // ── Phase targets ─────────────────────────────────────────────────────────
+  const phaseTargets = {
+    base:       { min: 0.5, max: 0.75 },
+    build:      { min: 0.25, max: 0.5 },
+    peak:       { min: 0, max: 0.1 },
+    race_taper: { min: 0, max: 0 },
+  }
+  const target = phaseTargets[phase] || phaseTargets.base
+
+  // ── Protein compliance (separate from signals) ────────────────────────────
+  const protRow = db.prepare(`
+    SELECT AVG(daily_p) as avg FROM (
+      SELECT date, SUM(protein_g) as daily_p FROM nutrition_logs
+      WHERE date >= ? AND date <= ? GROUP BY date
+    )
+  `).get(weekStartDate, wEnd)
+  const proteinAvg = protRow.avg != null ? Math.round(protRow.avg) : null
+
+  const gainingFlag = lossRate != null && lossRate < 0 && ['base', 'build'].includes(phase)
+
+  const STATUS_LABELS = {
+    green:  'No evidence of under-fueling',
+    yellow: 'Recovery / fueling warning',
+    red:    'Suspend intentional deficit',
+  }
+  const ACTIONS = {
+    green:  'Continue as planned — framework is working.',
+    yellow: 'Add 100–150 kcal/day on training days from carbs or protein. Reassess in 7–14 days.',
+    red:    'Suspend the deficit entirely. Fuel at maintenance until all signals resolve (typically 5–7 days).',
+  }
+
+  return {
+    weekStart: weekStartDate,
+    status,
+    statusLabel:   STATUS_LABELS[status],
+    statusReason,
+    confidence,
+    availableStreams,
+    totalStreams: Object.keys(dataStreams).length,
+    dataStreams,
+    activeSignals,
+    activeDomains,
+    signals,
+    lossRate:      lossRate,
+    thisAvgWeight: thisAvgWeight != null ? Math.round(thisAvgWeight * 10) / 10 : null,
+    lastAvgWeight: lastAvgWeight != null ? Math.round(lastAvgWeight * 10) / 10 : null,
+    weightFastPersisting,
+    phase,
+    target,
+    gainingFlag,
+    proteinAvg,
+    proteinTarget: 155,
+    action:        ACTIONS[status],
+    checkin:       checkin || null,
+    dataQuality: {
+      weightDays:      twWeights.length,
+      weightConfidence,
+      hrvDays:         twHRV.length,
+      rhrDays:         rhrSeries.length,
+      rpeSessions:     twRPERows.length,
+      motivationDays,
+    },
+  }
+})
+
+// ─── IPC: stoploss:history ────────────────────────────────────────────────
+ipcMain.handle('stoploss:history', (event, weeks) => {
+  const numWeeks = weeks || 12
+  function slDateAdd2(dateStr, n) {
+    const d = new Date(dateStr + 'T00:00:00Z')
+    d.setUTCDate(d.getUTCDate() + n)
+    return d.toISOString().slice(0, 10)
+  }
+  // Compute Monday of current week
+  const now = new Date()
+  const dow = now.getUTCDay()
+  const diff = dow === 0 ? -6 : 1 - dow
+  now.setUTCDate(now.getUTCDate() + diff)
+  const currentMonday = now.toISOString().slice(0, 10)
+
+  const result = []
+  for (let i = numWeeks - 1; i >= 0; i--) {
+    const weekStart = slDateAdd2(currentMonday, -i * 7)
+    const weekEnd   = slDateAdd2(weekStart, 6)
+    // Fetch weights for this week and prior week
+    function slAvg2(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null }
+    const twW = db.prepare('SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL').all(weekStart, weekEnd).map(r=>r.body_weight_lb)
+    const lwW = db.prepare('SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL').all(slDateAdd2(weekStart,-7), slDateAdd2(weekStart,-1)).map(r=>r.body_weight_lb)
+    const twA = slAvg2(twW)
+    const lwA = slAvg2(lwW)
+    const change = twA != null && lwA != null ? twA - lwA : null
+    const lr     = change != null ? Math.round(-change * 100) / 100 : null
+    const checkin = db.prepare('SELECT * FROM weekly_fat_loss_checkins WHERE week_start_date = ?').get(weekStart)
+    const phase = checkin?.training_phase || 'base'
+    const phaseTargets = { base:{min:0.5,max:0.75}, build:{min:0.25,max:0.5}, peak:{min:0,max:0.1}, race_taper:{min:0,max:0} }
+    // Simplified status for history: use stored status if available, else derive from weight only
+    let histStatus = checkin?.status || null
+    if (!histStatus && twA != null && lwA != null && twW.length >= 4 && lwW.length >= 4) {
+      histStatus = lr > 1 ? 'yellow' : 'green'
+    }
+
+    if (twA != null || checkin) {
+      result.push({
+        weekStart,
+        avgWeight: twA != null ? Math.round(twA*10)/10 : null,
+        lossRate: lr,
+        phase,
+        target: phaseTargets[phase] || phaseTargets.base,
+        waistIn: checkin?.waist_in || null,
+        status:  histStatus,
+      })
+    }
+  }
+  return result
 })
 
 // ─── IPC: stats:weekly-volume ─────────────────────────────────────────────

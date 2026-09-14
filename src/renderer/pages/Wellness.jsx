@@ -59,6 +59,7 @@ export default function Wellness() {
     pain_notes: '',
     motivation_1_5: null,
     notes: '',
+    hunger: '',
   })
 
   const [history, setHistory] = useState([])
@@ -85,6 +86,7 @@ export default function Wellness() {
           pain_notes: todayEntry.pain_notes || '',
           motivation_1_5: todayEntry.motivation_1_5,
           notes: todayEntry.notes || '',
+          hunger: todayEntry.hunger || '',
         })
       }
       setHistory(hist || [])
@@ -194,6 +196,16 @@ export default function Wellness() {
               </div>
             </div>
 
+            <div className="form-group">
+              <label>Hunger Level</label>
+              <select value={form.hunger} onChange={e => set('hunger', e.target.value)}>
+                <option value="">— not logged —</option>
+                <option value="normal">Normal</option>
+                <option value="elevated">Elevated</option>
+                <option value="excessive">Excessive</option>
+              </select>
+            </div>
+
             <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <input
                 type="checkbox" id="pain_flag"
@@ -269,6 +281,7 @@ export default function Wellness() {
                       <th style={{ padding: '6px 4px' }}>Fat</th>
                       <th style={{ padding: '6px 4px' }}>Sor</th>
                       <th style={{ padding: '6px 4px' }}>Mot</th>
+                      <th style={{ padding: '6px 4px' }}>Hun</th>
                       <th style={{ padding: '6px 4px' }}>Pain</th>
                     </tr>
                   </thead>
@@ -281,6 +294,11 @@ export default function Wellness() {
                         <td style={{ padding: '5px 4px', textAlign: 'center' }}>{h.fatigue_1_5 ?? '—'}</td>
                         <td style={{ padding: '5px 4px', textAlign: 'center' }}>{h.soreness_1_5 ?? '—'}</td>
                         <td style={{ padding: '5px 4px', textAlign: 'center' }}>{h.motivation_1_5 ?? '—'}</td>
+                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>
+                          {h.hunger === 'excessive' ? <span style={{color:'var(--accent-red)'}}>E</span>
+                           : h.hunger === 'elevated' ? <span style={{color:'var(--accent-amber)'}}>↑</span>
+                           : h.hunger === 'normal' ? '✓' : '—'}
+                        </td>
                         <td style={{ padding: '5px 4px', textAlign: 'center' }}>
                           {h.pain_flag ? <span style={{ color: 'var(--accent-red)' }}>⚠</span> : '—'}
                         </td>

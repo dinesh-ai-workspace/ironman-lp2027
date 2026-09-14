@@ -47,4 +47,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // External links
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+
+  // Fat-loss / Stop-loss
+  logWeight: (date, weight) => ipcRenderer.invoke('stoploss:log-weight', { date, weight }),
+  stopLossCheckinGet: (weekStartDate) => ipcRenderer.invoke('stoploss:checkin:get', weekStartDate),
+  stopLossCheckinSave: (entry) => ipcRenderer.invoke('stoploss:checkin:save', entry),
+  stopLossWeeklyCheck: (weekStartDate) => ipcRenderer.invoke('stoploss:weekly-check', weekStartDate),
+  stopLossHistory: (weeks) => ipcRenderer.invoke('stoploss:history', weeks),
 })

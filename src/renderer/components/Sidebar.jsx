@@ -1,5 +1,5 @@
 import React from 'react'
-import { LayoutDashboard, PlusCircle, CalendarDays, Moon, UtensilsCrossed } from 'lucide-react'
+import { LayoutDashboard, PlusCircle, CalendarDays, Moon, UtensilsCrossed, TrendingDown } from 'lucide-react'
 
 const RACE_DATE = new Date('2027-07-25T00:00:00Z')
 
@@ -16,6 +16,7 @@ const navItems = [
   { key: 'calendar', label: 'Calendar', Icon: CalendarDays },
   { key: 'wellness', label: 'Wellness', Icon: Moon },
   { key: 'nutrition', label: 'Nutrition', Icon: UtensilsCrossed },
+  { key: 'fatloss', label: 'Stop-Loss', Icon: TrendingDown },
 ]
 
 export default function Sidebar({ currentPage, onNavigate }) {
