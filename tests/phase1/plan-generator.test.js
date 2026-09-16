@@ -171,32 +171,53 @@ describe('Test 5: 16mi / 2.5hr long-run ceiling', () => {
   });
 });
 
-// ─── Test 6: 5.5-6hr bike ceiling ────────────────────────────────────────────
-describe('Test 6: 5.5-6hr bike ceiling', () => {
-  test('no bike session exceeds 360 minutes', () => {
+// ─── Test 6: Bridged bike progression ceiling ────────────────────────────────
+// New progression peaks at 315 min (5.25hr) at week 37.
+// No 330+ min rides exist. Specificity weeks (34 & 37) are local peaks;
+// recovery weeks (35 & 38) drop back sharply.
+describe('Test 6: Bridged bike progression ceiling', () => {
+  test('no bike session exceeds 320 minutes (scheduler safety cap)', () => {
     const { sessions } = generated;
     const bikeSessions = sessions.filter(s => s.discipline === 'bike');
-
     for (const bike of bikeSessions) {
-      expect(bike.target_duration).toBeLessThanOrEqual(360);
+      expect(bike.target_duration).toBeLessThanOrEqual(320);
     }
   });
 
-  test('exactly one bike session has target_duration >= 330 minutes, in the last 2 weeks of the peak block', () => {
-    const { sessions, blocks } = generated;
+  test('no bike session reaches 330 minutes (old sim-ride threshold gone)', () => {
+    const { sessions } = generated;
+    const over330 = sessions.filter(s => s.discipline === 'bike' && s.target_duration >= 330);
+    expect(over330.length).toBe(0);
+  });
+
+  test('week 37 long ride is the plan-wide maximum (specificity peak)', () => {
+    const { sessions } = generated;
     const planStart = new Date(TEST_CONFIG.planStartDate);
-    const simRides = sessions.filter(
-      s => s.discipline === 'bike' && s.target_duration >= 330
+    const longBikes = sessions.filter(
+      s => s.discipline === 'bike' && (s.type === 'long_ride' || s.type === 'race_simulation')
     );
+    const maxDur = Math.max(...longBikes.map(s => s.target_duration));
+    const wk37Rides = longBikes.filter(s => weekNumForDate(s.date, planStart) === 37);
+    expect(wk37Rides.length).toBeGreaterThan(0);
+    expect(wk37Rides[0].target_duration).toBe(maxDur);
+  });
 
-    // There should be exactly one simulation ride
-    expect(simRides.length).toBe(1);
-
-    // It should be in the last 2 weeks of the peak block
-    const peakBlock = blocks.find(b => b.phase === 'peak');
-    const simRideWeeks = peakBlock ? [peakBlock.weekEnd - 1, peakBlock.weekEnd] : [38, 39];
-    const simRideWeek = weekNumForDate(simRides[0].date, planStart);
-    expect(simRideWeeks).toContain(simRideWeek);
+  test('recovery weeks (35 & 38) have a shorter long ride than their preceding specificity week', () => {
+    const { sessions } = generated;
+    const planStart = new Date(TEST_CONFIG.planStartDate);
+    const longBikeByWeek = {};
+    sessions.filter(s => s.discipline === 'bike' && s.type === 'long_ride').forEach(s => {
+      const wn = weekNumForDate(s.date, planStart);
+      longBikeByWeek[wn] = s.target_duration;
+    });
+    // wk35 < wk34 (recovery after first specificity)
+    if (longBikeByWeek[34] && longBikeByWeek[35]) {
+      expect(longBikeByWeek[35]).toBeLessThan(longBikeByWeek[34]);
+    }
+    // wk38 < wk37 (recovery after second specificity)
+    if (longBikeByWeek[37] && longBikeByWeek[38]) {
+      expect(longBikeByWeek[38]).toBeLessThan(longBikeByWeek[37]);
+    }
   });
 });
 

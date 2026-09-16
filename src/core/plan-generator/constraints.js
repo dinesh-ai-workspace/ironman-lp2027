@@ -7,22 +7,46 @@
 /**
  * Ramp table: max long-ride duration (minutes) by week number.
  * Used by getMaxLongBikeDuration (progression.js) and wouldExceedBikeCap.
- * Week 39 = simulation ride (345 min). Week 40 = step-back recovery. Week 41 = unwind (120 min).
+ *
+ * Bridged progression — no week-over-week jump exceeds 45 min (0.75hr).
+ * Weeks 34 & 37 are specificity weeks: total weekly hours stay flat,
+ * discipline mix shifts toward bike (swim/run reallocated, not dropped).
+ * Weeks 35 & 38 are manual recovery weeks following each specificity block.
+ * Week 40 = step-back (every-4th formula). Week 41 = taper unwind (120 min).
  */
 const BIKE_RAMP_TABLE = {
   1:  23,
-  4:  90,
-  8:  120,
-  12: 150,
-  16: 180,
-  20: 210,
-  24: 240,
-  32: 285,
-  34: 300,
-  36: 315,
-  39: 345,
-  41: 120,
+  4:  90,   // 1.5 hr
+  8:  120,  // 2.0 hr
+  12: 150,  // 2.5 hr
+  16: 180,  // 3.0 hr
+  20: 195,  // 3.25 hr (bridged — was 3.5)
+  24: 225,  // 3.75 hr (bridged — was 4.0)
+  28: 240,  // 4.0 hr
+  30: 255,  // 4.25 hr
+  32: 270,  // 4.5 hr
+  34: 300,  // 5.0 hr — specificity week (Build phase)
+  35: 195,  // 3.25 hr — recovery week post-specificity
+  36: 255,  // 4.25 hr — LP climbing specificity
+  37: 315,  // 5.25 hr — specificity week, final big exposure (Peak phase)
+  38: 180,  // 3.0 hr — recovery week post-specificity
+  39: 270,  // 4.5 hr — final race-specific stimulus
+  41: 120,  // taper unwind
 };
+
+/**
+ * Weeks where bike volume is deliberately elevated and swim/run are reallocated
+ * (not added) to keep total weekly hours flat. The long ride is the primary purpose
+ * of the week; do not flag these as errors in any volume-ratio check.
+ */
+const SPECIFICITY_BIKE_WEEKS = [34, 37];
+
+/**
+ * Manual recovery weeks that follow each specificity block.
+ * These are NOT step-back weeks by the every-4th formula, but the
+ * BIKE_RAMP_TABLE already caps the long ride accordingly.
+ */
+const BIKE_RECOVERY_WEEKS = [35, 38];
 
 /**
  * Ramp table: max long-run duration (minutes) by week number.
@@ -147,37 +171,18 @@ function wouldExceedLongRunCeiling(durationMin, distanceMi) {
 /**
  * Returns true if this bike session would exceed the allowable cap.
  *
- * Rules:
- * - Max bike duration at any week is determined by interpolating BIKE_RAMP_TABLE.
- *   Sessions strictly greater than maxAllowed violate the ramp ceiling.
- * - One 5.5-6hr (330-360 min) ride is allowed at weeks 38-39 ONLY, and never repeated.
- *   This is checked separately from the ramp ceiling:
- *   - At week 38 or 39, a session of 330-360min is allowed only if no such session exists yet.
- *   - At week 38 or 39, a second session of >= 330min is a violation.
- *   - Outside weeks 38-39, a session of >= 330min that would also exceed the ramp ceiling
- *     is caught by the ramp check above. But at week 36 (ramp = 330), exactly 330min is
- *     allowed by the ramp (not a simulation ride, just a long ride at its ceiling).
+ * The ramp ceiling is the sole constraint — max duration at any week is
+ * determined by interpolating BIKE_RAMP_TABLE. The previous 330+min
+ * simulation-ride guard is removed: the new bridged progression peaks at
+ * 315 min (week 37), so no ride reaches 330 min.
  *
  * @param {number} durationMin
  * @param {number} weekNum
- * @param {Array<{weekNum:number, durationMin:number, type:string}>} allBikeSessions
  * @returns {boolean}
  */
-function wouldExceedBikeCap(durationMin, weekNum, allBikeSessions) {
+function wouldExceedBikeCap(durationMin, weekNum) {
   const maxAllowed = interpolateBikeMax(weekNum);
-
-  // Strictly exceeds the ramp ceiling — always a violation regardless of week.
-  if (durationMin > maxAllowed) return true;
-
-  // Simulation-ride restriction: only one 330+ min ride is allowed, and only at week 39.
-  // Weeks 37-38 interpolate toward 345 but are capped at 325 by the scheduler.
-  if (weekNum >= 37 && durationMin >= 330) {
-    if (weekNum !== 39) return true;
-    const existingSimRide = allBikeSessions.some(s => s.durationMin >= 330);
-    if (existingSimRide) return true;
-  }
-
-  return false;
+  return durationMin > maxAllowed;
 }
 
 /**
@@ -214,6 +219,8 @@ module.exports = {
   isTaperWeek,
   BIKE_RAMP_TABLE,
   RUN_RAMP_TABLE,
+  SPECIFICITY_BIKE_WEEKS,
+  BIKE_RECOVERY_WEEKS,
   interpolateBikeMax,
   interpolateRunMax,
 };

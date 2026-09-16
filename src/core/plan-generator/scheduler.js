@@ -6,6 +6,8 @@ const {
   wouldExceedLongRunCeiling,
   wouldExceedBikeCap,
   isTaperWeek,
+  SPECIFICITY_BIKE_WEEKS,
+  BIKE_RECOVERY_WEEKS,
 } = require('./constraints');
 
 const {
@@ -332,38 +334,33 @@ function scheduleWeek(config) {
     ));
   }
 
-  // Saturday: Long Bike — duration comes directly from the ramp table.
+  // Saturday: Long Bike — duration driven entirely by the ramp table.
   const longBikeMax = getMaxLongBikeDuration(weekNum);
 
-  // Simulation ride: one 345-min ride at the third-to-last peak week.
-  // Using weekEnd - 2 keeps it off step-back weeks (every 4th) and leaves
-  // weekEnd - 1 as a step-back recovery and weekEnd as the unwind (120 min).
-  const peakBlock = phaseBlocks.find(b => b.phase === 'peak');
-  const simRideWeeks = peakBlock ? [peakBlock.weekEnd - 2] : [39];
+  // Specificity weeks (34 & 37): the ramp table already encodes the elevated
+  // long-ride duration. These weeks reallocate swim/run volume toward bike —
+  // total weekly hours stay flat. No hardcoded override needed.
+  const isSpecificityWeek  = SPECIFICITY_BIKE_WEEKS.includes(weekNum);
+  const isBikeRecoveryWeek = BIKE_RECOVERY_WEEKS.includes(weekNum);
 
-  const allBikeSessions = allScheduledSessions
-    .filter(s => s.discipline === 'bike')
-    .map(s => ({ weekNum: s._weekNum, durationMin: s.target_duration, type: s.type }));
+  let longBikeDur = roundTo5(longBikeMax * sbMult);
+  // Safety buffer: new progression peaks at 315 min (wk37). Cap at 320 to prevent
+  // any interpolation rounding from accidentally exceeding the ramp ceiling.
+  longBikeDur = Math.min(longBikeDur, 320);
 
-  const simRideAlreadyPlaced = allBikeSessions.some(s => s.durationMin >= 330);
-  const isSimRideWeek = simRideWeeks.includes(weekNum) && !simRideAlreadyPlaced && !isStepBack;
-
-  let longBikeDur;
-  if (isSimRideWeek) {
-    longBikeDur = 345; // 5.75hr simulation ride — matches ramp table wk38 max
-  } else {
-    longBikeDur = roundTo5(longBikeMax * sbMult);
-    // Keep all non-sim rides below the 330min threshold to avoid constraint violation.
-    longBikeDur = Math.min(longBikeDur, 325);
-  }
-
-  // Determine bike session type
-  let satBikeType = isSimRideWeek ? 'race_simulation' : 'long_ride';
-  let satBikePurpose = isSimRideWeek ? 'race_prep' : 'endurance';
+  let satBikeType    = 'long_ride';
+  let satBikePurpose = isSpecificityWeek ? 'race_prep' : 'endurance';
   let satBikeImportance = 'key';
-  let satBikeNotes = isSimRideWeek
-    ? 'LP terrain simulation ride — 5.5-6hr, race pacing, full fueling protocol'
-    : 'Long ride — fueling practice (60-70g carbs/hr)';
+  let satBikeNotes;
+  if (isSpecificityWeek && weekNum === 37) {
+    satBikeNotes = 'Specificity week — final big exposure, race-day fueling rehearsal. Reallocate from swim/run this week, total hours stay flat.';
+  } else if (isSpecificityWeek) {
+    satBikeNotes = 'Specificity week — reallocate swim/run toward bike this week, total hours stay flat. Full fueling protocol (60–80g carbs/hr).';
+  } else if (isBikeRecoveryWeek) {
+    satBikeNotes = 'Recovery week after specificity block — keep effort easy, no heroics.';
+  } else {
+    satBikeNotes = 'Long ride — fueling practice (60–70g carbs/hr)';
+  }
 
   // Tune-up race window notes
   const himBlock = phaseBlocks.find(b => b.phase === 'build') || {};

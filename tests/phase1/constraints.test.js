@@ -158,58 +158,74 @@ describe('wouldExceedLongRunCeiling', () => {
 });
 
 // ─── wouldExceedBikeCap ───────────────────────────────────────────────────────
+// New bridged progression — ramp table anchors (minutes):
+//   wk4=90, wk8=120, wk12=150, wk16=180, wk20=195, wk24=225,
+//   wk28=240, wk30=255, wk32=270, wk34=300, wk35=195, wk36=255,
+//   wk37=315, wk38=180, wk39=270, wk41=120.
+// Function signature is now 2 args (removed allBikeSessions — no sim-ride guard).
 describe('wouldExceedBikeCap', () => {
-  // Week 36 ramp max = 330min
-  test('week 36: 330min = boundary — false', () => {
-    expect(wouldExceedBikeCap(330, 36, [])).toBe(false);
+  // Week 4: exact anchor
+  test('week 4: 90min = false (at ceiling)', () => {
+    expect(wouldExceedBikeCap(90, 4)).toBe(false);
+  });
+  test('week 4: 91min = true (over ceiling)', () => {
+    expect(wouldExceedBikeCap(91, 4)).toBe(true);
   });
 
-  test('week 36: 331min = true (over 330 ceiling)', () => {
-    expect(wouldExceedBikeCap(331, 36, [])).toBe(true);
+  // Week 24: new anchor = 225min (was 240 in old progression)
+  test('week 24: 225min = false (at ceiling)', () => {
+    expect(wouldExceedBikeCap(225, 24)).toBe(false);
+  });
+  test('week 24: 226min = true (over ceiling)', () => {
+    expect(wouldExceedBikeCap(226, 24)).toBe(true);
   });
 
-  // Week 38 ramp max = 360min; simulation ride rules apply (>= 330)
-  test('week 38: 360min = false (first simulation ride allowed)', () => {
-    expect(wouldExceedBikeCap(360, 38, [])).toBe(false);
+  // Week 34: specificity week anchor = 300min
+  test('week 34: 300min = false (at ceiling)', () => {
+    expect(wouldExceedBikeCap(300, 34)).toBe(false);
+  });
+  test('week 34: 301min = true (over ceiling)', () => {
+    expect(wouldExceedBikeCap(301, 34)).toBe(true);
   });
 
-  test('week 38: 361min = true (over 360 ceiling)', () => {
-    expect(wouldExceedBikeCap(361, 38, [])).toBe(true);
+  // Week 35: recovery week anchor = 195min
+  test('week 35: 195min = false (at ceiling)', () => {
+    expect(wouldExceedBikeCap(195, 35)).toBe(false);
+  });
+  test('week 35: 196min = true (over ceiling)', () => {
+    expect(wouldExceedBikeCap(196, 35)).toBe(true);
   });
 
-  test('week 39: second simulation ride (>= 330min already exists) = true', () => {
-    const existing = [{ weekNum: 38, durationMin: 360, type: 'race_simulation' }];
-    expect(wouldExceedBikeCap(360, 39, existing)).toBe(true);
+  // Week 36: LP climbing specificity anchor = 255min
+  test('week 36: 255min = false (at ceiling)', () => {
+    expect(wouldExceedBikeCap(255, 36)).toBe(false);
+  });
+  test('week 36: 256min = true (over ceiling)', () => {
+    expect(wouldExceedBikeCap(256, 36)).toBe(true);
   });
 
-  test('week 39: first simulation ride = false', () => {
-    expect(wouldExceedBikeCap(330, 39, [])).toBe(false);
+  // Week 37: peak specificity anchor = 315min (new progression max)
+  test('week 37: 315min = false (at ceiling)', () => {
+    expect(wouldExceedBikeCap(315, 37)).toBe(false);
+  });
+  test('week 37: 316min = true (over ceiling)', () => {
+    expect(wouldExceedBikeCap(316, 37)).toBe(true);
   });
 
-  test('week 40+: simulation ride (>= 330min) = true (outside window)', () => {
-    expect(wouldExceedBikeCap(330, 40, [])).toBe(true);
+  // Week 38: recovery week anchor = 180min
+  test('week 38: 180min = false (at ceiling)', () => {
+    expect(wouldExceedBikeCap(180, 38)).toBe(false);
+  });
+  test('week 38: 181min = true (over ceiling)', () => {
+    expect(wouldExceedBikeCap(181, 38)).toBe(true);
   });
 
-  test('week 37: simulation ride (>= 330min) = true (before week 38)', () => {
-    expect(wouldExceedBikeCap(330, 37, [])).toBe(true);
+  // Week 39: final stimulus anchor = 270min
+  test('week 39: 270min = false (at ceiling)', () => {
+    expect(wouldExceedBikeCap(270, 39)).toBe(false);
   });
-
-  // Week 24 ramp max = 240min
-  test('week 24: 240min = false (at ceiling)', () => {
-    expect(wouldExceedBikeCap(240, 24, [])).toBe(false);
-  });
-
-  test('week 24: 241min = true (over ceiling)', () => {
-    expect(wouldExceedBikeCap(241, 24, [])).toBe(true);
-  });
-
-  // Early week interpolation
-  test('week 4: max is 90min; 90min = false', () => {
-    expect(wouldExceedBikeCap(90, 4, [])).toBe(false);
-  });
-
-  test('week 4: 91min = true', () => {
-    expect(wouldExceedBikeCap(91, 4, [])).toBe(true);
+  test('week 39: 271min = true (over ceiling)', () => {
+    expect(wouldExceedBikeCap(271, 39)).toBe(true);
   });
 });
 
