@@ -13,7 +13,7 @@ const DEFAULT_PHASE_TEMPLATES = [
   { phase: 'foundation',   phaseName: 'Foundation',               weekCount: 12, hoursMin: 6.5,  hoursMax: 8.5  },
   { phase: 'aerobic_base', phaseName: 'Aerobic Base',             weekCount: 12, hoursMin: 8.5,  hoursMax: 11   },
   { phase: 'build',        phaseName: 'Build / Hill Specificity', weekCount: 10, hoursMin: 10.5, hoursMax: 13.5 },
-  { phase: 'peak',         phaseName: 'Peak (Specificity)',        weekCount: 6,  hoursMin: 11,   hoursMax: 14   },
+  { phase: 'peak',         phaseName: 'Peak (Specificity)',        weekCount: 6,  hoursMin: 9,    hoursMax: 11   },
   { phase: 'taper',        phaseName: 'Taper',                    weekCount: 4,  hoursMin: 3.5,  hoursMax: 8    },
 ];
 

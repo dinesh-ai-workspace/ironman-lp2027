@@ -194,7 +194,7 @@ function buildReadinessGates(blocks, planStartDate) {
         {
           discipline: 'swim',
           metric: 'race_ready_swim_w36',
-          target_value: 'GREEN: 3,800m continuous wetsuit, open water comfortable, race-ready | YELLOW: 3,000-3,800m, still some fatigue at distance | RED: breakdown during simulation OR any open injury',
+          target_value: 'GREEN: 4,000m continuous wetsuit, open water comfortable, race-ready | YELLOW: 3,200-4,000m, still some fatigue at distance | RED: breakdown during simulation OR any open injury',
           notes: 'STOP condition: breakdown during simulation ride OR any open injury',
         },
         {

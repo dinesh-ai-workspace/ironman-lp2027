@@ -444,6 +444,29 @@ function scheduleWeek(config) {
     sessions.push(longRunSession);
   }
 
+  // Thursday: Swim — third guaranteed session of the week.
+  // Swim frequency (3x/week) is the non-negotiable target through Base and Build.
+  // Duration is kept shorter than Tue/Fri sessions to fit alongside the long run.
+  // Step-back weeks reduce duration but do not drop the session — frequency matters
+  // more than volume for a technique-limited discipline.
+  // If hours are tight on a given day, shorten the run not this swim.
+  const thuSwimDur = isStepBack
+    ? 20
+    : roundTo5(phase === 'foundation' ? 25 : weekNum <= 20 ? 30 : 35);
+  const thuSwimType = swimFocus === 'technique' ? 'technique' : 'aerobic_intervals';
+  sessions.push(makeSession(
+    dayDate(weekStartDate, 3), // Thursday
+    'swim',
+    thuSwimType,
+    thuSwimDur,
+    estimateSwimDistance(thuSwimDur, weekNum),
+    swimFocus === 'technique' ? 1 : 2,
+    false,
+    swimFocus,
+    'supporting',
+    'Third swim of the week — shorter, technique or aerobic focus. If time is short, reduce the run not this session. estimated_distance:true'
+  ));
+
   // Sunday: Brick run (if applicable) or easy run
   if (includeBrick && !isStepBack) {
     const brickBikeDur = roundTo5(Math.min(getMaxLongBikeDuration(weekNum) * 0.75, 180));
