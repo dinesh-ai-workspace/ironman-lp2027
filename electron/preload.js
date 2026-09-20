@@ -27,7 +27,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWeeklyVolume: (weeks) => ipcRenderer.invoke('stats:weekly-volume', weeks),
   getUpcomingSessions: (days) => ipcRenderer.invoke('stats:upcoming', days),
   getReadinessGates: () => ipcRenderer.invoke('stats:readiness'),
-  updateReadinessGate: (id, data) => ipcRenderer.invoke('stats:readiness:update', id, data),
+  setReadinessOverride: (gate, status, note) => ipcRenderer.invoke('readiness:overrides:set', gate, status, note),
+  clearReadinessOverride: (gate) => ipcRenderer.invoke('readiness:overrides:clear', gate),
   getProgressStats: () => ipcRenderer.invoke('stats:progress'),
   getReadinessScore: () => ipcRenderer.invoke('stats:readiness-score'),
 
@@ -41,6 +42,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRacePlan: () => ipcRenderer.invoke('nutrition:race-plan:get'),
   saveRacePlan: (p) => ipcRenderer.invoke('nutrition:race-plan:save', p),
   importMFP: (filePath) => ipcRenderer.invoke('nutrition:import-mfp', filePath),
+
+  // Renpho body composition
+  importRenpho: (filePath) => ipcRenderer.invoke('import:renpho', filePath),
+  getBodyCompHistory: (days) => ipcRenderer.invoke('body-comp:history', days),
+  getBodyCompLatest: () => ipcRenderer.invoke('body-comp:latest'),
 
   // File dialog
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),

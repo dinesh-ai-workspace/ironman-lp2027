@@ -27,6 +27,7 @@ const { runImportPipeline } = require('../src/importer/pipeline')
 const garminPreset = require('../src/importer/presets/garmin')
 const mfpPreset = require('../src/importer/presets/myfitnesspal')
 const { parseGarminSleepFile } = require('../src/importer/presets/garmin-sleep')
+const { runRenphoPipeline } = require('../src/importer/renpho-pipeline')
 
 let db
 
@@ -76,6 +77,39 @@ function runMigrations() {
   if (!ciCols.includes('status')) {
     db.prepare("ALTER TABLE weekly_fat_loss_checkins ADD COLUMN status TEXT NOT NULL DEFAULT 'green'").run()
   }
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS readiness_overrides (
+      gate       TEXT PRIMARY KEY,
+      status     TEXT NOT NULL,
+      note       TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    )
+  `).run()
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS body_composition (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      date                 TEXT NOT NULL,
+      time                 TEXT,
+      weight_lb            REAL NOT NULL,
+      bmi                  REAL,
+      body_fat_pct         REAL,
+      skeletal_muscle_pct  REAL,
+      fat_free_mass_lb     REAL,
+      subcutaneous_fat_pct REAL,
+      visceral_fat         REAL,
+      body_water_pct       REAL,
+      muscle_mass_lb       REAL,
+      bone_mass_lb         REAL,
+      protein_pct          REAL,
+      bmr_kcal             INTEGER,
+      metabolic_age        INTEGER,
+      source               TEXT NOT NULL DEFAULT 'renpho',
+      import_batch_id      TEXT,
+      UNIQUE(date, time)
+    )
+  `).run()
 }
 
 // ─── First-launch plan initialization ─────────────────────────────────────
@@ -350,10 +384,12 @@ ipcMain.handle('wellness:get', (event, date) => {
 })
 
 // ─── IPC: wellness:history ────────────────────────────────────────────────
-ipcMain.handle('wellness:history', (event, days) => {
+ipcMain.handle('wellness:history', (event, { start, end } = {}) => {
+  const endDate   = end   || new Date().toISOString().slice(0, 10)
+  const startDate = start || (() => { const d = new Date(); d.setDate(d.getDate() - 13); return d.toISOString().slice(0, 10) })()
   return db.prepare(
-    'SELECT * FROM daily_wellness ORDER BY date DESC LIMIT ?'
-  ).all(days || 14)
+    'SELECT * FROM daily_wellness WHERE date >= ? AND date <= ? ORDER BY date DESC'
+  ).all(startDate, endDate)
 })
 
 // ─── IPC: stoploss:log-weight ─────────────────────────────────────────────
@@ -429,14 +465,15 @@ ipcMain.handle('stoploss:weekly-check', (event, weekStartDate) => {
   const wEnd      = slDateAdd(weekStartDate, 6)
   const lwStart   = slDateAdd(weekStartDate, -7)
   const lwEnd     = slDateAdd(weekStartDate, -1)
-  const llStart   = slDateAdd(weekStartDate, -14)  // two weeks ago
-  const llEnd     = slDateAdd(weekStartDate, -8)
-  const fw28Start = slDateAdd(weekStartDate, -28)
+  const _ntRow  = db.prepare('SELECT protein_g FROM nutrition_targets ORDER BY id DESC LIMIT 1').get()
+  const _proteinTarget = _ntRow?.protein_g || 155
+  const _planRow = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
+  const _blockRow = _planRow ? db.prepare(
+    'SELECT phase FROM plan_blocks WHERE plan_id = ? AND start_date <= ? AND end_date >= ? LIMIT 1'
+  ).get(_planRow.id, weekStartDate, weekStartDate) : null
+  const phase = _blockRow?.phase || 'base'
 
-  const checkin = db.prepare('SELECT * FROM weekly_fat_loss_checkins WHERE week_start_date = ?').get(weekStartDate)
-  const phase = checkin?.training_phase || 'base'
-
-  // ── Signal A1: Weight loss too fast ──────────────────────────────────────
+  // ── Signal A1: Weight gaining week-over-week ─────────────────────────────
   const twWeights = db.prepare(
     'SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL'
   ).all(weekStartDate, wEnd).map(r => r.body_weight_lb)
@@ -447,32 +484,21 @@ ipcMain.handle('stoploss:weekly-check', (event, weekStartDate) => {
   const lastAvgWeight = slAvg(lwWeights)
   const weeklyChange  = thisAvgWeight != null && lastAvgWeight != null ? thisAvgWeight - lastAvgWeight : null
   const lossRate      = weeklyChange != null ? Math.round(-weeklyChange * 100) / 100 : null
-  // Require ≥4 readings in each week — fewer means the rate is noise, not signal
-  const weightConfidence = twWeights.length >= 6 ? 'full' : twWeights.length >= 4 ? 'moderate' : 'insufficient'
-  const weightSignal = weightConfidence !== 'insufficient' && lwWeights.length >= 4 && lossRate != null && lossRate > 1
-
-  // Persistence check: was weight also dropping fast the week before last?
-  // Used to distinguish a genuine 2-week trend from a one-week glycogen/water anomaly.
-  const llWeights     = db.prepare(
-    'SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL'
-  ).all(llStart, llEnd).map(r => r.body_weight_lb)
-  const llAvgWeight   = slAvg(llWeights)
-  const lastWeekChange = lastAvgWeight != null && llAvgWeight != null ? lastAvgWeight - llAvgWeight : null
-  const lastWeekLossRate = lastWeekChange != null ? Math.round(-lastWeekChange * 100) / 100 : null
-  const weightFastPersisting = lastWeekLossRate != null && lastWeekLossRate > 1
-    && lwWeights.length >= 4 && llWeights.length >= 4
-
-  // ── Signal A2: Persistent hunger ─────────────────────────────────────────
-  const hungryDays = db.prepare(
-    "SELECT COUNT(*) as cnt FROM daily_wellness WHERE date >= ? AND date <= ? AND hunger IN ('elevated','excessive')"
-  ).get(weekStartDate, wEnd).cnt
-  const hungerSignal = hungryDays >= 4
+  const weightConfidence = twWeights.length >= 6 ? 'full' : twWeights.length >= 3 ? 'moderate' : 'insufficient'
+  // Fire when weight is not going down — need ≥3 readings this week, any last week reading to compare
+  const weightSignal = weightConfidence !== 'insufficient' && lastAvgWeight != null && lossRate != null && lossRate <= 0
 
   // ── Signal B1: Rising fatigue (RHR trending up 3+ consecutive days) ──────
   const rhrRows = db.prepare(
     'SELECT date, notes FROM daily_wellness WHERE date >= ? AND date <= ? ORDER BY date ASC'
   ).all(weekStartDate, wEnd)
   const rhrSeries = rhrRows.map(r => ({ date: r.date, rhr: parseRHR(r.notes) })).filter(r => r.rhr != null)
+  const lwRHRRows = db.prepare(
+    'SELECT notes FROM daily_wellness WHERE date >= ? AND date <= ?'
+  ).all(lwStart, lwEnd)
+  const lwRHRSeries = lwRHRRows.map(r => parseRHR(r.notes)).filter(v => v != null)
+  const thisRHRAvg = slAvg(rhrSeries.map(r => r.rhr))
+  const lastRHRAvg = slAvg(lwRHRSeries)
   let consecRising = 0, maxConsec = 0
   for (let i = 1; i < rhrSeries.length; i++) {
     consecRising = rhrSeries[i].rhr > rhrSeries[i-1].rhr ? consecRising + 1 : 0
@@ -492,100 +518,66 @@ ipcMain.handle('stoploss:weekly-check', (event, weekStartDate) => {
   const hrvSignal = twHRV.length >= 4 && lwHRV.length >= 4 && thisHRVAvg != null && lastHRVAvg != null
     && thisHRVAvg < lastHRVAvg * 0.95
 
-  // ── Signal B3: Motivation declining ──────────────────────────────────────
-  const lowMotDays = db.prepare(
-    'SELECT COUNT(*) as cnt FROM daily_wellness WHERE date >= ? AND date <= ? AND motivation_1_5 IS NOT NULL AND motivation_1_5 <= 2'
-  ).get(weekStartDate, wEnd).cnt
-  const motivationDays = db.prepare(
-    'SELECT COUNT(*) as cnt FROM daily_wellness WHERE date >= ? AND date <= ? AND motivation_1_5 IS NOT NULL'
-  ).get(weekStartDate, wEnd).cnt
-  const motivationSignal = lowMotDays >= 4
-
-  // ── Signal C1: Strength declining (manual) ────────────────────────────────
-  const strengthSignal = checkin?.strength_trend === 'declining'
-
-  // ── Signal C2: Workouts unusually hard (RPE >15% above 4-wk trailing avg) ─
-  const twRPERows = db.prepare(
-    'SELECT rpe FROM logged_sessions WHERE date >= ? AND date <= ? AND rpe IS NOT NULL'
-  ).all(weekStartDate, wEnd)
-  const trailRPERow = db.prepare(
-    'SELECT AVG(rpe) as avg, COUNT(*) as cnt FROM logged_sessions WHERE date >= ? AND date <= ? AND rpe IS NOT NULL'
-  ).get(fw28Start, lwEnd)
-  // Require ≥3 sessions in current week and ≥3 in trailing period — one hard session ≠ pattern
-  const thisRPEAvg = twRPERows.length >= 3 ? slAvg(twRPERows.map(r => r.rpe)) : null
-  const trailRPE   = trailRPERow.cnt >= 3 ? trailRPERow.avg : null
-  const rpeSignal  = thisRPEAvg != null && trailRPE != null && thisRPEAvg > trailRPE * 1.15
+  // ── Signal C1: BFP rising week-over-week (Renpho) ────────────────────────
+  const twBFP = db.prepare(
+    'SELECT body_fat_pct FROM body_composition WHERE date >= ? AND date <= ? AND body_fat_pct IS NOT NULL'
+  ).all(weekStartDate, wEnd).map(r => r.body_fat_pct)
+  const lwBFP = db.prepare(
+    'SELECT body_fat_pct FROM body_composition WHERE date >= ? AND date <= ? AND body_fat_pct IS NOT NULL'
+  ).all(lwStart, lwEnd).map(r => r.body_fat_pct)
+  const thisBFPAvg = slAvg(twBFP)
+  const lastBFPAvg = slAvg(lwBFP)
+  // Fire when BFP is not going down (flat or rising) — need ≥3 this week, any last week reading
+  const bfpSignal = twBFP.length >= 3 && lastBFPAvg != null
+    && thisBFPAvg != null && lastBFPAvg != null
+    && thisBFPAvg >= lastBFPAvg
 
   // ── Signals map ───────────────────────────────────────────────────────────
   const signals = {
-    weight_too_fast:     weightSignal,
-    persistent_hunger:   hungerSignal,
-    rising_fatigue:      fatigueSignal,
-    hrv_declining:       !!hrvSignal,
-    strength_declining:  !!strengthSignal,
-    workouts_hard:       !!rpeSignal,
-    motivation_declining: motivationSignal,
+    weight_not_losing: weightSignal,
+    bfp_not_losing:    !!bfpSignal,
+    rising_fatigue:    fatigueSignal,
+    hrv_declining:     !!hrvSignal,
   }
 
-  // ── Domain grouping ───────────────────────────────────────────────────────
-  // A=Energy deficit  B=Recovery  C=Training performance
   const SIGNAL_DOMAINS = {
-    weight_too_fast:     'A',
-    persistent_hunger:   'A',
-    rising_fatigue:      'B',
-    hrv_declining:       'B',
-    motivation_declining:'B',
-    workouts_hard:       'C',
-    strength_declining:  'C',
+    weight_not_losing: 'A',
+    bfp_not_losing:    'C',
+    rising_fatigue:    'B',
+    hrv_declining:     'B',
   }
   const activeSignals = Object.entries(signals).filter(([, v]) => v).map(([k]) => k)
   const activeCount   = activeSignals.length
   const activeDomains = [...new Set(activeSignals.map(s => SIGNAL_DOMAINS[s]))]
   const activeDomainCount = activeDomains.length
 
-  // ── Confidence scoring (5 data streams) ──────────────────────────────────
+  // ── Confidence scoring (4 data streams) ──────────────────────────────────
   const dataStreams = {
-    weight:     weightConfidence !== 'insufficient',
-    hrv:        twHRV.length >= 4,
-    rhr:        rhrSeries.length >= 3,
-    rpe:        twRPERows.length >= 3,
-    motivation: motivationDays >= 4,
+    weight: weightConfidence !== 'insufficient',
+    bfp:    twBFP.length >= 3,
+    hrv:    twHRV.length >= 4,
+    rhr:    rhrSeries.length >= 3,
   }
   const availableStreams = Object.values(dataStreams).filter(Boolean).length
-  const confidence = availableStreams >= 4 ? 'high' : availableStreams >= 2 ? 'moderate' : 'low'
+  const confidence = availableStreams >= 3 ? 'high' : availableStreams >= 2 ? 'moderate' : 'low'
 
   // ── Status logic (domain-aware, persistence-gated) ────────────────────────
   let status = 'green'
   let statusReason = ''
 
-  if (signals.strength_declining && signals.weight_too_fast) {
-    if (weightFastPersisting) {
-      // Red only when weight has been fast for ≥2 consecutive weeks — rules out glycogen/water spike
-      status = 'red'
-      statusReason = 'Strength declining with weight loss too fast for 2+ weeks'
-    } else {
-      // First week of the combo — watch, don't act yet
-      status = 'yellow'
-      statusReason = 'Strength declining with fast weight loss — monitoring (1 week)'
-    }
-  } else if (activeCount >= 3 && activeDomainCount >= 2) {
-    // 3+ signals spanning at least 2 independent domains
+  if (signals.weight_not_losing && signals.bfp_not_losing) {
     status = 'red'
-    statusReason = `${activeCount} signals across ${activeDomainCount} domains`
-  } else if (activeDomainCount >= 2) {
-    // Signals from different domains — not correlated noise
+    statusReason = 'Neither weight nor BFP is dropping — fat loss has stalled'
+  } else if (signals.bfp_not_losing) {
     status = 'yellow'
-    statusReason = `Signals in domains: ${activeDomains.join(', ')}`
-  } else if (signals.weight_too_fast) {
-    // High-priority solo energy signal
+    statusReason = 'BFP not dropping week-over-week'
+  } else if (signals.weight_not_losing) {
     status = 'yellow'
-    statusReason = 'Weight loss exceeding safe rate'
+    statusReason = 'Weight not dropping week-over-week'
   } else if (activeCount >= 2) {
-    // 2+ signals in same domain (e.g. HRV + RHR both Recovery) — likely one root cause, watch not act
     status = 'yellow'
-    statusReason = 'Multiple correlated recovery signals'
+    statusReason = 'Multiple recovery signals — may affect fat loss'
   }
-  // 0 or 1 non-weight signal → green
 
   // ── Phase targets ─────────────────────────────────────────────────────────
   const phaseTargets = {
@@ -608,14 +600,14 @@ ipcMain.handle('stoploss:weekly-check', (event, weekStartDate) => {
   const gainingFlag = lossRate != null && lossRate < 0 && ['base', 'build'].includes(phase)
 
   const STATUS_LABELS = {
-    green:  'No evidence of under-fueling',
-    yellow: 'Recovery / fueling warning',
-    red:    'Suspend intentional deficit',
+    green:  'Fat loss on track',
+    yellow: 'Fat loss stalling',
+    red:    'Fat loss stalled',
   }
   const ACTIONS = {
-    green:  'Continue as planned — framework is working.',
-    yellow: 'Add 100–150 kcal/day on training days from carbs or protein. Reassess in 7–14 days.',
-    red:    'Suspend the deficit entirely. Fuel at maintenance until all signals resolve (typically 5–7 days).',
+    green:  'Weight and BFP trending down — continue as planned.',
+    yellow: 'Review weekly nutrition and training load. Check if calories are too high or activity too low.',
+    red:    'Both weight and BFP not dropping. Review total weekly calories and training stimulus.',
   }
 
   return {
@@ -633,21 +625,24 @@ ipcMain.handle('stoploss:weekly-check', (event, weekStartDate) => {
     lossRate:      lossRate,
     thisAvgWeight: thisAvgWeight != null ? Math.round(thisAvgWeight * 10) / 10 : null,
     lastAvgWeight: lastAvgWeight != null ? Math.round(lastAvgWeight * 10) / 10 : null,
-    weightFastPersisting,
     phase,
     target,
     gainingFlag,
     proteinAvg,
-    proteinTarget: 155,
+    proteinTarget: _proteinTarget,
     action:        ACTIONS[status],
-    checkin:       checkin || null,
+    thisBFPAvg:    thisBFPAvg != null ? Math.round(thisBFPAvg * 10) / 10 : null,
+    lastBFPAvg:    lastBFPAvg != null ? Math.round(lastBFPAvg * 10) / 10 : null,
+    thisHRVAvg:    thisHRVAvg != null ? Math.round(thisHRVAvg) : null,
+    lastHRVAvg:    lastHRVAvg != null ? Math.round(lastHRVAvg) : null,
+    thisRHRAvg:    thisRHRAvg != null ? Math.round(thisRHRAvg) : null,
+    lastRHRAvg:    lastRHRAvg != null ? Math.round(lastRHRAvg) : null,
     dataQuality: {
       weightDays:      twWeights.length,
       weightConfidence,
+      bfpDays:         twBFP.length,
       hrvDays:         twHRV.length,
       rhrDays:         rhrSeries.length,
-      rpeSessions:     twRPERows.length,
-      motivationDays,
     },
   }
 })
@@ -673,30 +668,28 @@ ipcMain.handle('stoploss:history', (event, weeks) => {
     const weekEnd   = slDateAdd2(weekStart, 6)
     // Fetch weights for this week and prior week
     function slAvg2(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null }
-    const twW = db.prepare('SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL').all(weekStart, weekEnd).map(r=>r.body_weight_lb)
-    const lwW = db.prepare('SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL').all(slDateAdd2(weekStart,-7), slDateAdd2(weekStart,-1)).map(r=>r.body_weight_lb)
-    const twA = slAvg2(twW)
-    const lwA = slAvg2(lwW)
+    const twW   = db.prepare('SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL').all(weekStart, weekEnd).map(r=>r.body_weight_lb)
+    const lwW   = db.prepare('SELECT body_weight_lb FROM daily_wellness WHERE date >= ? AND date <= ? AND body_weight_lb IS NOT NULL').all(slDateAdd2(weekStart,-7), slDateAdd2(weekStart,-1)).map(r=>r.body_weight_lb)
+    const twBFP = db.prepare('SELECT body_fat_pct FROM body_composition WHERE date >= ? AND date <= ? AND body_fat_pct IS NOT NULL').all(weekStart, weekEnd).map(r=>r.body_fat_pct)
+    const twA   = slAvg2(twW)
+    const lwA   = slAvg2(lwW)
     const change = twA != null && lwA != null ? twA - lwA : null
     const lr     = change != null ? Math.round(-change * 100) / 100 : null
-    const checkin = db.prepare('SELECT * FROM weekly_fat_loss_checkins WHERE week_start_date = ?').get(weekStart)
-    const phase = checkin?.training_phase || 'base'
-    const phaseTargets = { base:{min:0.5,max:0.75}, build:{min:0.25,max:0.5}, peak:{min:0,max:0.1}, race_taper:{min:0,max:0} }
-    // Simplified status for history: use stored status if available, else derive from weight only
-    let histStatus = checkin?.status || null
-    if (!histStatus && twA != null && lwA != null && twW.length >= 4 && lwW.length >= 4) {
-      histStatus = lr > 1 ? 'yellow' : 'green'
+    const avgBFP = twBFP.length ? Math.round(slAvg2(twBFP) * 10) / 10 : null
+    const target = { min: 0.5, max: 0.75 }
+    let histStatus = null
+    if (twA != null && lwA != null && twW.length >= 4 && lwW.length >= 4) {
+      histStatus = lr > 1 ? 'yellow' : lr <= 0 ? 'red' : 'green'
     }
 
-    if (twA != null || checkin) {
+    if (twA != null || avgBFP != null) {
       result.push({
         weekStart,
         avgWeight: twA != null ? Math.round(twA*10)/10 : null,
+        avgBFP,
         lossRate: lr,
-        phase,
-        target: phaseTargets[phase] || phaseTargets.base,
-        waistIn: checkin?.waist_in || null,
-        status:  histStatus,
+        target,
+        status: histStatus,
       })
     }
   }
@@ -781,26 +774,353 @@ ipcMain.handle('stats:upcoming', (event, days) => {
 
 // ─── IPC: stats:readiness ─────────────────────────────────────────────────
 ipcMain.handle('stats:readiness', () => {
-  const today = new Date()
-  const futureDate = new Date()
-  futureDate.setUTCDate(today.getUTCDate() + 7)
-  const futureDateStr = futureDate.toISOString().slice(0, 10)
+  const PLAN_START = new Date('2026-09-14T00:00:00Z')
+  const now = new Date()
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  const todayStr = todayUTC.toISOString().slice(0, 10)
+  const currentWeek = Math.max(1, Math.floor((todayUTC - PLAN_START) / (7 * 24 * 60 * 60 * 1000)) + 1)
 
-  return db.prepare(`
-    SELECT * FROM readiness_gates
-    WHERE date <= ?
-    ORDER BY date ASC
-  `).all(futureDateStr)
+  const CHECKPOINTS = [8, 16, 24, 28, 32, 36]
+  const isAtCheckpoint = CHECKPOINTS.includes(currentWeek)
+  // evalCpWeek: thresholds to evaluate against (next checkpoint, or 36 if past all)
+  const evalCpWeek = CHECKPOINTS.find(w => w >= currentWeek) || 36
+  const evalCpIdx  = CHECKPOINTS.indexOf(evalCpWeek)
+  // gapCpWeek: checkpoint to show gap towards (next future one after evalCp at checkpoints, same at non-checkpoints)
+  const gapCpIdx   = isAtCheckpoint ? Math.min(evalCpIdx + 1, CHECKPOINTS.length - 1) : evalCpIdx
+  const gapCpWeek  = CHECKPOINTS[gapCpIdx]
+  // prevCpWeek: previous checkpoint for trajectory interpolation
+  const prevCpWeek = evalCpIdx > 0 ? CHECKPOINTS[evalCpIdx - 1] : 0
+
+  function phaseQuestion(wk) {
+    if (wk <= 8)  return 'Am I progressing fast enough to reach Ironman readiness?'
+    if (wk <= 16) return 'Am I still on the right trajectory?'
+    if (wk <= 24) return 'Am I developing the required durability?'
+    if (wk <= 32) return 'Am I demonstrating race-specific capability?'
+    if (wk <= 36) return 'Do I have enough evidence to take on LPIM?'
+    return 'Am I ready to race?'
+  }
+
+  const SWIM_T = [
+    { week: 8,  green: 1.0, amber: 0.75 },
+    { week: 16, green: 1.5, amber: 1.2  },
+    { week: 24, green: 2.0, amber: 1.5  },
+    { week: 28, green: 2.5, amber: 2.0  },
+    { week: 32, green: 3.0, amber: 2.5  },
+    { week: 36, green: 3.8, amber: 3.0  },
+  ]
+  const BIKE_T = [
+    { week: 8,  green: 120, amber: 90  },
+    { week: 16, green: 180, amber: 150 },
+    { week: 24, green: 240, amber: 180 },
+    { week: 28, green: 270, amber: 210 },
+    { week: 32, green: 300, amber: 240 },
+    { week: 36, green: 330, amber: 270 },
+  ]
+  const RUN_T = [
+    { week: 8,  green: 8,  amber: 6  },
+    { week: 16, green: 10, amber: 8  },
+    { week: 24, green: 12, amber: 10 },
+    { week: 28, green: 14, amber: 12 },
+    { week: 32, green: 15, amber: 13 },
+    { week: 36, green: 16, amber: 14 },
+  ]
+
+  function getT(thresholds, week) {
+    return thresholds.find(t => t.week === week) || thresholds[thresholds.length - 1]
+  }
+
+  function evalCapacityGate(actual, thresholds) {
+    const evalT = getT(thresholds, evalCpWeek)
+    const gapT  = getT(thresholds, gapCpWeek)
+
+    if (actual == null) {
+      return {
+        status: 'nodata', mode: isAtCheckpoint ? 'checkpoint' : 'trajectory',
+        actual: null, greenTarget: evalT.green, amberTarget: evalT.amber,
+        gapCpWeek, gapTarget: gapT.green, gap: gapT.green,
+        trajectoryLabel: null,
+      }
+    }
+
+    let status, trajectoryLabel = null
+
+    if (isAtCheckpoint || currentWeek > 36) {
+      status = actual >= evalT.green ? 'green' : actual >= evalT.amber ? 'amber' : 'red'
+    } else {
+      const prevT     = prevCpWeek > 0 ? getT(thresholds, prevCpWeek) : null
+      const prevGreen = prevT ? prevT.green : 0
+      const weeksIn   = currentWeek - prevCpWeek
+      const blockLen  = evalCpWeek - prevCpWeek
+      const expected  = prevGreen + (evalT.green - prevGreen) * (weeksIn / blockLen)
+
+      if (actual >= evalT.green)   { status = 'green'; trajectoryLabel = 'Ahead of target' }
+      else if (actual >= expected) { status = 'green'; trajectoryLabel = 'On trajectory' }
+      else if (actual >= prevGreen){ status = 'amber'; trajectoryLabel = 'At risk' }
+      else                         { status = 'red';   trajectoryLabel = 'Behind' }
+    }
+
+    const gap = Math.max(0, Math.round((gapT.green - actual) * 10) / 10)
+    return {
+      status, mode: isAtCheckpoint ? 'checkpoint' : 'trajectory',
+      actual, greenTarget: evalT.green, amberTarget: evalT.amber,
+      gapCpWeek, gapTarget: gapT.green, gap, trajectoryLabel,
+    }
+  }
+
+  // ── Capacity gates (6-week rolling window) ───────────────────────────────
+  const _6wAgo = new Date(todayUTC)
+  _6wAgo.setUTCDate(_6wAgo.getUTCDate() - 42)
+  const _6wAgoStr = _6wAgo.toISOString().slice(0, 10)
+
+  // Swim: pace = duration / (distance * 10) min/100m — filter > 3.5 (3:30/100m)
+  const maxSwim = db.prepare(`
+    SELECT MAX(distance) AS val FROM logged_sessions
+    WHERE discipline='swim' AND distance > 0 AND duration > 0 AND date >= ?
+      AND (CAST(duration AS REAL) / (distance * 10)) <= 3.5
+  `).get(_6wAgoStr)
+  // Bike: duration-based, no pace filter needed (indoor = no distance)
+  const maxBike = db.prepare("SELECT MAX(duration) AS val FROM logged_sessions WHERE discipline='bike' AND duration IS NOT NULL AND date >= ?").get(_6wAgoStr)
+  // Run: pace = duration / distance min/mile — filter > 14:00/mile
+  const maxRun  = db.prepare(`
+    SELECT MAX(distance) AS val FROM logged_sessions
+    WHERE discipline='run' AND distance > 0 AND duration > 0 AND date >= ?
+      AND (CAST(duration AS REAL) / distance) <= 14.0
+  `).get(_6wAgoStr)
+
+  const swimGate = evalCapacityGate(maxSwim?.val ?? null, SWIM_T)
+  const bikeGate = evalCapacityGate(maxBike?.val ?? null, BIKE_T)
+  const runGate  = evalCapacityGate(maxRun?.val  ?? null, RUN_T)
+
+  // ── Durability gate (adherence-based) ─────────────────────────────────────
+  const _28dAgo = new Date(todayUTC)
+  _28dAgo.setUTCDate(_28dAgo.getUTCDate() - 28)
+  const _28dAgoStr = _28dAgo.toISOString().slice(0, 10)
+
+  const activePlan  = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
+  const activePlanId = activePlan?.id || -1
+
+  const plannedCnt = db.prepare(
+    'SELECT COUNT(*) AS cnt FROM planned_sessions WHERE plan_id = ? AND date >= ? AND date <= ?'
+  ).get(activePlanId, _28dAgoStr, todayStr)?.cnt || 0
+
+  const loggedCnt = db.prepare(
+    'SELECT COUNT(*) AS cnt FROM logged_sessions WHERE date >= ? AND date <= ?'
+  ).get(_28dAgoStr, todayStr)?.cnt || 0
+
+  const adherencePct = plannedCnt > 0 ? Math.round((loggedCnt / plannedCnt) * 100) : null
+
+  const durDates = db.prepare(
+    'SELECT date FROM logged_sessions WHERE date >= ? AND date <= ? ORDER BY date'
+  ).all(_28dAgoStr, todayStr)
+
+  let maxGapDays = 0
+  for (let i = 1; i < durDates.length; i++) {
+    const gap = Math.round(
+      (new Date(durDates[i].date + 'T00:00:00Z') - new Date(durDates[i - 1].date + 'T00:00:00Z'))
+      / (1000 * 60 * 60 * 24)
+    )
+    if (gap > maxGapDays) maxGapDays = gap
+  }
+
+  let durabilityGate
+  if (plannedCnt === 0 && loggedCnt < 3) {
+    durabilityGate = { status: 'nodata', detail: 'Need planned sessions and training logs to evaluate', adherencePct: null, loggedCnt, plannedCnt, maxGapDays: null }
+  } else if (plannedCnt === 0) {
+    const s = maxGapDays <= 7 ? 'green' : maxGapDays <= 14 ? 'amber' : 'red'
+    durabilityGate = { status: s, detail: `${loggedCnt} sessions logged, max gap ${maxGapDays} days (no plan to compare)`, adherencePct: null, loggedCnt, plannedCnt, maxGapDays }
+  } else {
+    let durStatus, durDetail
+    if (adherencePct >= 85 && maxGapDays <= 7) {
+      durStatus = 'green'
+      durDetail = `${adherencePct}% adherence (${loggedCnt}/${plannedCnt} sessions), max gap ${maxGapDays} days`
+    } else if (adherencePct >= 70 && maxGapDays <= 14) {
+      durStatus = 'amber'
+      durDetail = `${adherencePct}% adherence (${loggedCnt}/${plannedCnt}), max gap ${maxGapDays} days — consistency needs work`
+    } else {
+      durStatus = 'red'
+      const reason = adherencePct < 70 ? `${adherencePct}% adherence` : `${maxGapDays}-day gap`
+      durDetail = `${reason} — ${loggedCnt}/${plannedCnt} sessions, max gap ${maxGapDays} days`
+    }
+    durabilityGate = { status: durStatus, detail: durDetail, adherencePct, loggedCnt, plannedCnt, maxGapDays }
+  }
+
+  // ── Race-specific gate (active from week 25) ──────────────────────────────
+  let raceSpecificGate
+  if (currentWeek < 25) {
+    raceSpecificGate = {
+      status: 'na', active: false,
+      detail: `Active from week 25 — ${25 - currentWeek} week${25 - currentWeek === 1 ? '' : 's'} away`,
+      bricksLast4Wks: 0, bricksSinceW25: 0,
+    }
+  } else {
+    // Bricks in last 4 weeks: is_brick flag OR same-day bike+run
+    const bricksByFlag = db.prepare(
+      'SELECT COUNT(*) AS cnt FROM logged_sessions WHERE date >= ? AND date <= ? AND is_brick = 1'
+    ).get(_28dAgoStr, todayStr)?.cnt || 0
+
+    const bricksByDay = db.prepare(`
+      SELECT COUNT(DISTINCT b.date) AS cnt
+      FROM logged_sessions b
+      JOIN logged_sessions r ON b.date = r.date AND b.id != r.id
+      WHERE b.discipline = 'bike' AND r.discipline = 'run'
+      AND b.date >= ? AND b.date <= ?
+    `).get(_28dAgoStr, todayStr)?.cnt || 0
+
+    const bricksLast4 = Math.max(bricksByFlag, bricksByDay)
+
+    // Total bricks since week 25
+    const w25Start = new Date(PLAN_START)
+    w25Start.setUTCDate(w25Start.getUTCDate() + (25 - 1) * 7)
+    const w25StartStr = w25Start.toISOString().slice(0, 10)
+
+    const bricksW25Flag = db.prepare(
+      'SELECT COUNT(*) AS cnt FROM logged_sessions WHERE date >= ? AND date <= ? AND is_brick = 1'
+    ).get(w25StartStr, todayStr)?.cnt || 0
+
+    const bricksW25Day = db.prepare(`
+      SELECT COUNT(DISTINCT b.date) AS cnt
+      FROM logged_sessions b
+      JOIN logged_sessions r ON b.date = r.date AND b.id != r.id
+      WHERE b.discipline = 'bike' AND r.discipline = 'run'
+      AND b.date >= ? AND b.date <= ?
+    `).get(w25StartStr, todayStr)?.cnt || 0
+
+    const bricksSinceW25 = Math.max(bricksW25Flag, bricksW25Day)
+
+    if (currentWeek >= 37) {
+      // Final readiness: capacity maintained + bricks accumulated + no big gap
+      const capOk    = [swimGate, bikeGate, runGate].every(g => g.status !== 'red')
+      const capGreen = [swimGate, bikeGate, runGate].every(g => g.status === 'green')
+      const gapOk    = maxGapDays <= 10
+      const bricksOk = bricksSinceW25 >= 4
+
+      let rsStatus, rsDetail
+      if (capGreen && gapOk && bricksOk) {
+        rsStatus = 'green'
+        rsDetail = `${bricksSinceW25} bricks since W25 ✓, capacity maintained, max gap ${maxGapDays} days`
+      } else if (capOk && bricksSinceW25 >= 2) {
+        const issues = []
+        if (!bricksOk) issues.push(`${bricksSinceW25} bricks (need 4+)`)
+        if (!gapOk)    issues.push(`${maxGapDays}-day gap`)
+        if (!capGreen) issues.push('capacity borderline')
+        rsStatus = 'amber'
+        rsDetail = issues.length ? issues.join(', ') : `${bricksSinceW25} bricks since W25, taper progressing`
+      } else {
+        rsStatus = 'red'
+        const issues = []
+        if (!capOk)               issues.push('capacity deficiency')
+        if (bricksSinceW25 < 2)   issues.push(`only ${bricksSinceW25} bricks since W25`)
+        if (maxGapDays > 14)       issues.push(`${maxGapDays}-day training gap`)
+        rsDetail = issues.join(', ') || 'insufficient race-specific preparation'
+      }
+      raceSpecificGate = { status: rsStatus, active: true, detail: rsDetail, bricksLast4Wks: bricksLast4, bricksSinceW25 }
+    } else {
+      // Weeks 25–36: track bricks as race-specific work
+      let rsStatus, rsDetail
+      if (bricksLast4 >= 2) {
+        rsStatus = 'green'
+        rsDetail = `${bricksLast4} brick sessions in last 4 weeks ✓`
+      } else if (bricksLast4 === 1) {
+        rsStatus = 'amber'
+        rsDetail = `1 brick in last 4 weeks — build to 2+ per month`
+      } else {
+        rsStatus = 'red'
+        rsDetail = 'No brick sessions in last 4 weeks — add bike+run combinations'
+      }
+      raceSpecificGate = { status: rsStatus, active: true, detail: rsDetail, bricksLast4Wks: bricksLast4, bricksSinceW25 }
+    }
+  }
+
+  // ── Weakest-link overall ──────────────────────────────────────────────────
+  const gateNames    = ['swim', 'bike', 'run', 'durability', 'race-specific']
+  const gateStatuses = [swimGate.status, bikeGate.status, runGate.status, durabilityGate.status]
+  if (raceSpecificGate.active) gateStatuses.push(raceSpecificGate.status)
+
+  const failCount      = gateStatuses.filter(s => s === 'red').length
+  const borderlineCount = gateStatuses.filter(s => s === 'amber').length
+  const nodataCount    = gateStatuses.filter(s => s === 'nodata').length
+
+  let overall, overallReason
+  if (failCount > 0) {
+    overall = 'red'
+    overallReason = gateNames.filter((_, i) => gateStatuses[i] === 'red').join(', ') + ' behind target'
+  } else if (borderlineCount >= 2 || (borderlineCount >= 1 && nodataCount >= 1)) {
+    overall = 'red'
+    overallReason = 'Multiple areas need attention'
+  } else if (borderlineCount === 1) {
+    overall = 'amber'
+    overallReason = gateNames.find((_, i) => gateStatuses[i] === 'amber') + ' is borderline'
+  } else if (nodataCount > 0) {
+    overall = 'amber'
+    overallReason = 'Insufficient data to confirm readiness'
+  } else {
+    overall = 'green'
+    overallReason = 'All gates passing'
+  }
+
+  // Apply manual overrides
+  const overrides = {}
+  db.prepare('SELECT gate, status, note FROM readiness_overrides').all().forEach(r => {
+    overrides[r.gate] = { status: r.status, note: r.note }
+  })
+  const GATE_DISPLAY = { swim: 'swim', bike: 'bike', run: 'run', durability: 'durability', raceSpecific: 'race-specific' }
+  const gateMap = { swim: swimGate, bike: bikeGate, run: runGate, durability: durabilityGate, raceSpecific: raceSpecificGate }
+  for (const [name, gate] of Object.entries(gateMap)) {
+    if (overrides[name]) {
+      gate.status = overrides[name].status
+      gate.overrideNote = overrides[name].note
+      gate.isOverridden = true
+    }
+  }
+
+  // Recompute overall with overrides applied
+  const oStatuses = Object.values(gateMap).map(g => g.status)
+  const oFail = oStatuses.filter(s => s === 'red').length
+  const oBorderline = oStatuses.filter(s => s === 'amber').length
+  const oNodata = oStatuses.filter(s => s === 'nodata').length
+  if (oFail > 0) {
+    overall = 'red'
+    overallReason = Object.keys(gateMap).filter((k, i) => oStatuses[i] === 'red').map(k => GATE_DISPLAY[k]).join(', ') + ' behind target'
+  } else if (oBorderline >= 2 || (oBorderline >= 1 && oNodata >= 1)) {
+    overall = 'red'
+    overallReason = 'Multiple areas need attention'
+  } else if (oBorderline === 1) {
+    overall = 'amber'
+    overallReason = GATE_DISPLAY[Object.keys(gateMap).find((k, i) => oStatuses[i] === 'amber')] + ' is borderline'
+  } else if (oNodata > 0) {
+    overall = 'amber'
+    overallReason = 'Insufficient data to confirm readiness'
+  } else {
+    overall = 'green'
+    overallReason = 'All gates passing'
+  }
+
+  return {
+    weekNum: currentWeek,
+    checkpointWeek: evalCpWeek,
+    isAtCheckpoint,
+    phaseQuestion: phaseQuestion(currentWeek),
+    gates: { swim: swimGate, bike: bikeGate, run: runGate, durability: durabilityGate, raceSpecific: raceSpecificGate },
+    overall,
+    overallReason,
+    overrides,
+  }
 })
 
-// ─── IPC: stats:readiness:update ─────────────────────────────────────────
-ipcMain.handle('stats:readiness:update', (event, id, data) => {
-  const result = db.prepare(`
-    UPDATE readiness_gates
-    SET actual_value = ?, status = ?, notes = ?
-    WHERE id = ?
-  `).run(data.actual_value || null, data.status || 'pending', data.notes || '', id)
-  return { changes: result.changes }
+
+// ─── IPC: readiness:overrides:set / clear ─────────────────────────────────
+ipcMain.handle('readiness:overrides:set', (event, gate, status, note) => {
+  db.prepare(`
+    INSERT INTO readiness_overrides (gate, status, note, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(gate) DO UPDATE SET status=excluded.status, note=excluded.note, updated_at=excluded.updated_at
+  `).run(gate, status, note || '', new Date().toISOString().slice(0, 10))
+  return { ok: true }
+})
+
+ipcMain.handle('readiness:overrides:clear', (event, gate) => {
+  db.prepare('DELETE FROM readiness_overrides WHERE gate = ?').run(gate)
+  return { ok: true }
 })
 
 // ─── IPC: stats:progress ─────────────────────────────────────────────────
@@ -863,11 +1183,12 @@ ipcMain.handle('stats:progress', () => {
 // ─── IPC: stats:readiness-score ──────────────────────────────────────────
 ipcMain.handle('stats:readiness-score', () => {
   const _now = new Date()
-  const today = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`
-  const _yd = new Date(_now); _yd.setDate(_yd.getDate() - 1)
-  const yesterday = `${_yd.getFullYear()}-${String(_yd.getMonth()+1).padStart(2,'0')}-${String(_yd.getDate()).padStart(2,'0')}`
-  const _28d = new Date(_now); _28d.setDate(_28d.getDate() - 28)
-  const lookback28 = `${_28d.getFullYear()}-${String(_28d.getMonth()+1).padStart(2,'0')}-${String(_28d.getDate()).padStart(2,'0')}`
+  const _nowUTC = new Date(Date.UTC(_now.getUTCFullYear(), _now.getUTCMonth(), _now.getUTCDate()))
+  const today = _nowUTC.toISOString().slice(0, 10)
+  const _yd = new Date(_nowUTC); _yd.setUTCDate(_yd.getUTCDate() - 1)
+  const yesterday = _yd.toISOString().slice(0, 10)
+  const _28d = new Date(_nowUTC); _28d.setUTCDate(_28d.getUTCDate() - 28)
+  const lookback28 = _28d.toISOString().slice(0, 10)
 
   // Parse Body Battery + HRV + RHR from Garmin notes
   function parseNotes(notes) {
@@ -1227,12 +1548,12 @@ ipcMain.handle('import:sleep', (event, filePath) => {
     }
 
     const stmt = db.prepare(`
-      INSERT OR REPLACE INTO daily_wellness
-        (date, sleep_hours, sleep_quality_1_5, fatigue_1_5, soreness_1_5,
-         pain_flag, pain_notes, motivation_1_5, notes)
-      VALUES
-        (@date, @sleep_hours, @sleep_quality_1_5, @fatigue_1_5, @soreness_1_5,
-         @pain_flag, @pain_notes, @motivation_1_5, @notes)
+      INSERT INTO daily_wellness (date, sleep_hours, sleep_quality_1_5, notes)
+      VALUES (@date, @sleep_hours, @sleep_quality_1_5, @notes)
+      ON CONFLICT(date) DO UPDATE SET
+        sleep_hours       = excluded.sleep_hours,
+        sleep_quality_1_5 = excluded.sleep_quality_1_5,
+        notes             = excluded.notes
     `)
 
     let imported = 0
@@ -1243,10 +1564,58 @@ ipcMain.handle('import:sleep', (event, filePath) => {
       }
     })()
 
-    return { imported, dates: entries.map(e => e.date) }
+    return { imported, skipped_duplicates: 0, skipped_invalid: 0, dates: entries.map(e => e.date) }
   } catch (err) {
     return { error: err.message }
   }
+})
+
+// ─── IPC: import:renpho ──────────────────────────────────────────────────
+ipcMain.handle('import:renpho', (event, filePath) => {
+  try {
+    return runRenphoPipeline({ filePath, db, dryRun: false })
+  } catch (err) {
+    return { error: err.message }
+  }
+})
+
+// ─── IPC: body-comp:history ──────────────────────────────────────────────
+ipcMain.handle('body-comp:history', (event, days = 90) => {
+  const since = new Date()
+  since.setDate(since.getDate() - days)
+  const sinceStr = since.toISOString().slice(0, 10)
+  // One row per date — use earliest reading (lowest time) per day
+  return db.prepare(`
+    SELECT date,
+      MIN(time) as time,
+      ROUND(AVG(weight_lb), 1)            as weight_lb,
+      ROUND(AVG(body_fat_pct), 1)         as body_fat_pct,
+      ROUND(AVG(skeletal_muscle_pct), 1)  as skeletal_muscle_pct,
+      ROUND(AVG(fat_free_mass_lb), 1)     as fat_free_mass_lb,
+      ROUND(AVG(subcutaneous_fat_pct), 1) as subcutaneous_fat_pct,
+      ROUND(AVG(visceral_fat), 1)         as visceral_fat,
+      ROUND(AVG(body_water_pct), 1)       as body_water_pct,
+      ROUND(AVG(muscle_mass_lb), 1)       as muscle_mass_lb,
+      ROUND(AVG(bone_mass_lb), 2)         as bone_mass_lb,
+      ROUND(AVG(protein_pct), 1)          as protein_pct,
+      ROUND(AVG(bmr_kcal), 0)             as bmr_kcal,
+      ROUND(AVG(metabolic_age), 0)        as metabolic_age
+    FROM body_composition
+    WHERE date >= ?
+    GROUP BY date
+    ORDER BY date DESC
+  `).all(sinceStr)
+})
+
+// ─── IPC: body-comp:latest ───────────────────────────────────────────────
+ipcMain.handle('body-comp:latest', () => {
+  return db.prepare(`
+    SELECT date, weight_lb, body_fat_pct, skeletal_muscle_pct, fat_free_mass_lb,
+           visceral_fat, muscle_mass_lb, bmr_kcal, metabolic_age
+    FROM body_composition
+    ORDER BY date DESC, time DESC
+    LIMIT 1
+  `).get() || null
 })
 
 // ─── IPC: nutrition:log ───────────────────────────────────────────────────
@@ -1285,8 +1654,9 @@ ipcMain.handle('nutrition:get-day', (event, date) => {
 })
 
 // ─── IPC: nutrition:history ───────────────────────────────────────────────
-ipcMain.handle('nutrition:history', (event, days) => {
-  const n = days || 14
+ipcMain.handle('nutrition:history', (event, { start, end } = {}) => {
+  const endDate   = end   || new Date().toISOString().slice(0, 10)
+  const startDate = start || (() => { const d = new Date(); d.setDate(d.getDate() - 13); return d.toISOString().slice(0, 10) })()
   return db.prepare(`
     SELECT date,
       ROUND(SUM(calories), 1) AS total_calories,
@@ -1294,10 +1664,10 @@ ipcMain.handle('nutrition:history', (event, days) => {
       ROUND(SUM(carbs_g), 1) AS total_carbs,
       ROUND(SUM(fat_g), 1) AS total_fat
     FROM nutrition_logs
+    WHERE date >= ? AND date <= ?
     GROUP BY date
     ORDER BY date DESC
-    LIMIT ?
-  `).all(n)
+  `).all(startDate, endDate)
 })
 
 // ─── IPC: nutrition:targets:get ───────────────────────────────────────────
@@ -1370,7 +1740,7 @@ ipcMain.handle('nutrition:import-mfp', (event, filePath) => {
     }
 
     if (idx.date === undefined || idx.meal === undefined) {
-      return { error: 'Could not find Date or Meal columns. Is this a MyFitnessPal Nutrition-Summary CSV?' }
+      return { error: `Could not find Date or Meal columns. Found headers: ${headers.slice(0, 6).join(', ')}. Expected a MyFitnessPal Nutrition-Summary CSV.` }
     }
 
     const stmt = db.prepare(`
@@ -1381,7 +1751,7 @@ ipcMain.handle('nutrition:import-mfp', (event, filePath) => {
     `)
 
     const batchId = require('crypto').randomUUID()
-    let imported = 0, skipped = 0
+    let imported = 0, skipped_duplicates = 0, skipped_invalid = 0
 
     const getVal = (row, field) => {
       if (idx[field] === undefined) return null
@@ -1398,14 +1768,13 @@ ipcMain.handle('nutrition:import-mfp', (event, filePath) => {
         const row = parseLine(line)
         const date = idx.date !== undefined ? row[idx.date] : null
         const meal = idx.meal !== undefined ? row[idx.meal] : 'other'
-        if (!date || !meal) { skipped++; continue }
-        if (skipMeals.includes(meal)) { skipped++; continue }
+        if (!date || !meal) { skipped_invalid++; continue }
+        if (skipMeals.includes(meal)) continue  // totals rows — skip silently
 
-        // Dedup: skip if same date+meal already exists in this batch
         const existing = db.prepare(
           'SELECT id FROM nutrition_logs WHERE date=? AND meal=? AND source=?'
         ).get(date, meal, 'csv_myfitnesspal')
-        if (existing) { skipped++; continue }
+        if (existing) { skipped_duplicates++; continue }
 
         stmt.run({
           date,
@@ -1426,7 +1795,7 @@ ipcMain.handle('nutrition:import-mfp', (event, filePath) => {
       }
     })()
 
-    return { imported, skipped, batch_id: batchId }
+    return { imported, skipped_duplicates, skipped_invalid, batch_id: batchId }
   } catch (err) {
     return { error: err.message }
   }

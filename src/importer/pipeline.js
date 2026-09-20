@@ -100,7 +100,7 @@ function normalizeRow(rawRow, mapping, preset) {
     let durationMin = null
     if (rawDuration && rawDuration.trim() !== '--') {
       const trimmed = rawDuration.trim()
-      const hmsMatch = trimmed.match(/^(\d+):(\d{2}):(\d{2})$/)
+      const hmsMatch = trimmed.match(/^(\d+):(\d{2}):(\d{2})(\.\d+)?$/)
       if (hmsMatch) {
         durationMin = Math.round(parseInt(hmsMatch[1]) * 60 + parseInt(hmsMatch[2]) + parseInt(hmsMatch[3]) / 60)
       } else {

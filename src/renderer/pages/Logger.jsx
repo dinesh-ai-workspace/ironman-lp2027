@@ -16,11 +16,6 @@ function Toast({ msg, type, onDone }) {
   )
 }
 
-const PRESETS = [
-  { value: 'garmin', label: 'Garmin Connect' },
-  { value: 'other', label: 'Other / Generic' },
-]
-
 export default function Logger() {
   const noAPI = typeof window.electronAPI === 'undefined'
 
@@ -34,6 +29,7 @@ export default function Logger() {
     rpe: '',
     notes: '',
     planned_session_id: '',
+    is_brick: false,
     // Bike-specific
     avg_power: '',
     normalized_power: '',
@@ -47,13 +43,6 @@ export default function Logger() {
   const [plannedOptions, setPlannedOptions] = useState([])
   const [toast, setToast] = useState(null)
   const [submitting, setSubmitting] = useState(false)
-
-  // ─── Import state ────────────────────────────────────────────────────────
-  const [importFile, setImportFile] = useState(null)
-  const [importPreset, setImportPreset] = useState('garmin')
-  const [preview, setPreview] = useState(null)
-  const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState(null)
 
   // Load planned sessions for current date + discipline
   useEffect(() => {
@@ -101,9 +90,11 @@ export default function Logger() {
         payload.wetsuit_used = form.wetsuit_used ? 1 : 0
       }
 
+      payload.is_brick = form.is_brick ? 1 : 0
+
       await window.electronAPI.logSession(payload)
       setToast({ msg: 'Session logged successfully!', type: 'success' })
-      setForm(f => ({ ...f, duration: '', distance: '', avg_hr: '', rpe: '', notes: '', planned_session_id: '', avg_power: '', normalized_power: '', avg_cadence: '' }))
+      setForm(f => ({ ...f, duration: '', distance: '', avg_hr: '', rpe: '', notes: '', planned_session_id: '', avg_power: '', normalized_power: '', avg_cadence: '', is_brick: false }))
     } catch (err) {
       setToast({ msg: err.message || 'Failed to log session', type: 'error' })
     } finally {
@@ -111,43 +102,8 @@ export default function Logger() {
     }
   }
 
-  async function handleChooseFile() {
-    if (noAPI) return
-    const path = await window.electronAPI.openFileDialog()
-    if (path) {
-      setImportFile(path)
-      setPreview(null)
-      setImportResult(null)
-    }
-  }
 
-  async function handlePreview() {
-    if (!importFile) return
-    try {
-      const result = await window.electronAPI.previewCSV(importFile, importPreset)
-      setPreview(result)
-    } catch (err) {
-      setToast({ msg: err.message, type: 'error' })
-    }
-  }
-
-  async function handleImport() {
-    if (!importFile || !preview) return
-    setImporting(true)
-    try {
-      const result = await window.electronAPI.importCSV(importFile, importPreset, {})
-      setImportResult(result)
-      setPreview(null)
-      setImportFile(null)
-      setToast({ msg: `Imported ${result.imported} sessions`, type: 'success' })
-    } catch (err) {
-      setToast({ msg: err.message, type: 'error' })
-    } finally {
-      setImporting(false)
-    }
-  }
-
-  const distLabel = form.discipline === 'swim' ? 'Distance (km)' : form.discipline === 'run' ? 'Distance (mi)' : 'Distance (mi)'
+  const distLabel = form.discipline === 'swim' ? 'Distance (km)' : form.discipline === 'run' ? 'Distance (mi)' : 'Distance (km)'
 
   return (
     <div>
@@ -255,6 +211,16 @@ export default function Logger() {
             </div>
           )}
 
+          {/* Brick flag */}
+          {(form.discipline === 'bike' || form.discipline === 'run') && (
+            <div className="form-group" style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', flexDirection: 'row', cursor: 'pointer' }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={form.is_brick} onChange={e => setField('is_brick', e.target.checked)} />
+                Brick session (bike + run same day)
+              </label>
+            </div>
+          )}
+
           {/* Link to planned session */}
           {plannedOptions.length > 0 && (
             <div className="form-group">
@@ -281,106 +247,6 @@ export default function Logger() {
         </form>
       </div>
 
-      {/* Import section */}
-      <div className="card">
-        <h2>Import from CSV</h2>
-
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' }}>
-          <button className="btn btn-secondary" onClick={handleChooseFile} disabled={noAPI}>
-            Choose CSV File
-          </button>
-          {importFile && (
-            <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-              {importFile.split('/').pop()}
-            </span>
-          )}
-        </div>
-
-        {importFile && (
-          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
-            <div style={{ flex: 1, maxWidth: '240px' }}>
-              <label>Preset</label>
-              <select value={importPreset} onChange={e => setImportPreset(e.target.value)}>
-                {PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </div>
-            <button className="btn btn-secondary" onClick={handlePreview} style={{ marginTop: '20px' }}>
-              Preview Import
-            </button>
-          </div>
-        )}
-
-        {/* Sleep file warning */}
-        {preview && !preview.error && preview.detected && preview.detected[0] === 'Sleep Score 7 Days' && (
-          <div style={{
-            background: 'rgba(245,158,11,0.1)', border: '1px solid var(--accent-amber)',
-            borderRadius: '8px', padding: '12px', marginBottom: '16px',
-            fontSize: '13px', color: 'var(--accent-amber)',
-          }}>
-            ⚠ This looks like a Garmin Sleep file. Use the <strong>Wellness tab → Import Sleep from Garmin</strong> instead — sleep data doesn't import here.
-          </div>
-        )}
-
-        {/* Preview results */}
-        {preview && !preview.error && preview.detected && preview.detected[0] !== 'Sleep Score 7 Days' && (
-          <div style={{ background: 'var(--bg-base)', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
-              <span className="badge badge-blue">{preview.rows_total} total rows</span>
-              <span className="badge badge-green">{preview.rows_valid} valid</span>
-              {preview.rows_invalid > 0 && <span className="badge badge-red">{preview.rows_invalid} invalid</span>}
-            </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-              Detected columns: {(preview.detected || []).slice(0, 6).join(', ')}{preview.detected && preview.detected.length > 6 ? '...' : ''}
-            </div>
-            {preview.sample && preview.sample.length > 0 && (
-              <div style={{ overflowX: 'auto' }}>
-                <table>
-                  <thead>
-                    <tr>
-                      {Object.keys(preview.sample[0]).slice(0, 6).map(k => <th key={k}>{k}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.sample.slice(0, 3).map((row, i) => (
-                      <tr key={i}>
-                        {Object.keys(preview.sample[0]).slice(0, 6).map(k => (
-                          <td key={k} style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {String(row[k] !== undefined ? row[k] : '')}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div style={{ marginTop: '16px' }}>
-              <button className="btn btn-success" onClick={handleImport} disabled={importing}>
-                {importing ? 'Importing...' : `Import ${preview.rows_valid} Sessions`}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {preview && !preview.error && preview.detected && preview.detected[0] === 'Sleep Score 7 Days' && null}
-
-        {preview && preview.error && (
-          <div className="badge badge-red" style={{ display: 'block', padding: '8px 12px', borderRadius: '8px', marginBottom: '16px' }}>
-            Error: {preview.error}
-          </div>
-        )}
-
-        {importResult && (
-          <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid var(--accent-green)', borderRadius: '8px', padding: '16px' }}>
-            <div style={{ fontWeight: 600, color: 'var(--accent-green)', marginBottom: '8px' }}>Import Complete</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-              <span>Imported: <strong style={{ color: 'var(--text-primary)' }}>{importResult.imported}</strong></span>
-              <span>Skipped (duplicates): <strong style={{ color: 'var(--text-primary)' }}>{importResult.skipped_duplicates}</strong></span>
-              <span>Skipped (invalid): <strong style={{ color: 'var(--text-primary)' }}>{importResult.skipped_invalid}</strong></span>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   )
 }

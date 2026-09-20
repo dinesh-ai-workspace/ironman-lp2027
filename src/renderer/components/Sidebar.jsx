@@ -1,26 +1,42 @@
-import React from 'react'
-import { LayoutDashboard, PlusCircle, CalendarDays, Moon, UtensilsCrossed, TrendingDown } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { LayoutDashboard, PlusCircle, CalendarDays, Moon, UtensilsCrossed, TrendingDown, Upload } from 'lucide-react'
 
-const RACE_DATE = new Date('2027-07-25T00:00:00Z')
+const FALLBACK_RACE_DATE = '2027-07-25'
 
-function getDaysToRace() {
+function getDaysToRace(dateStr) {
+  const raceDate = new Date(dateStr + 'T00:00:00Z')
   const today = new Date()
   const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()))
-  const diff = Math.ceil((RACE_DATE.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24))
+  const diff = Math.ceil((raceDate.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24))
   return diff > 0 ? diff : 0
 }
 
+function formatRaceDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z')
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+}
+
 const navItems = [
-  { key: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
-  { key: 'logger', label: 'Log Session', Icon: PlusCircle },
-  { key: 'calendar', label: 'Calendar', Icon: CalendarDays },
-  { key: 'wellness', label: 'Wellness', Icon: Moon },
+  { key: 'dashboard', label: 'Command Center', Icon: LayoutDashboard },
+  { key: 'calendar', label: 'Training Planner', Icon: CalendarDays },
+  { key: 'wellness', label: 'Sleep Tracker', Icon: Moon },
   { key: 'nutrition', label: 'Nutrition', Icon: UtensilsCrossed },
-  { key: 'fatloss', label: 'Stop-Loss', Icon: TrendingDown },
+  { key: 'fatloss', label: 'BFP Tracker', Icon: TrendingDown },
+  { key: 'import', label: 'Import Data', Icon: Upload },
+  { key: 'logger', label: 'Log Session', Icon: PlusCircle },
 ]
 
 export default function Sidebar({ currentPage, onNavigate }) {
-  const daysToRace = getDaysToRace()
+  const [raceDateStr, setRaceDateStr] = useState(FALLBACK_RACE_DATE)
+
+  useEffect(() => {
+    if (typeof window.electronAPI === 'undefined') return
+    window.electronAPI.getPlan().then(p => {
+      if (p?.race_date) setRaceDateStr(p.race_date)
+    }).catch(() => {})
+  }, [])
+
+  const daysToRace = getDaysToRace(raceDateStr)
 
   return (
     <nav className="sidebar">
@@ -50,7 +66,7 @@ export default function Sidebar({ currentPage, onNavigate }) {
           {daysToRace}
         </div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>days to go</div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Jul 25, 2027</div>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{formatRaceDate(raceDateStr)}</div>
       </div>
     </nav>
   )

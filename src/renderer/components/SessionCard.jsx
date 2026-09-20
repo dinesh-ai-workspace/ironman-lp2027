@@ -33,6 +33,11 @@ function formatDuration(minutes) {
 
 const READINESS_COLOR = { green: '#22c55e', amber: '#fbbf24', red: '#f87171' }
 
+function formatType(type) {
+  if (!type) return null
+  return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
 export default function SessionCard({ session, showDate = true, readinessTier = null }) {
   const disc = session.discipline || 'other'
   const color = DISCIPLINE_COLORS[disc] || 'var(--text-muted)'
@@ -61,7 +66,8 @@ export default function SessionCard({ session, showDate = true, readinessTier = 
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           {showDate && session.date && <span style={{ marginRight: '8px' }}>{session.date}</span>}
           {formatDuration(session.target_duration || session.duration)}
-          {session.purpose && <span style={{ marginLeft: '8px' }}>· {session.purpose}</span>}
+          {session.type && <span style={{ marginLeft: '8px', color: 'var(--text-secondary)' }}>· {formatType(session.type)}</span>}
+          {!session.type && session.purpose && <span style={{ marginLeft: '8px' }}>· {session.purpose}</span>}
         </div>
       </div>
     </div>

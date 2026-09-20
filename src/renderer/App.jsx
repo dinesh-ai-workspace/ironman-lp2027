@@ -6,6 +6,7 @@ import Calendar from './pages/Calendar'
 import Wellness from './pages/Wellness'
 import Nutrition from './pages/Nutrition'
 import FatLoss from './pages/FatLoss'
+import Import from './pages/Import'
 
 export default function App() {
   const [page, setPage] = useState('dashboard')
@@ -18,6 +19,7 @@ export default function App() {
       case 'wellness': return <Wellness />
       case 'nutrition': return <Nutrition />
       case 'fatloss': return <FatLoss />
+      case 'import': return <Import />
       default: return <Dashboard />
     }
   }

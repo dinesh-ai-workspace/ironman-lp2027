@@ -178,31 +178,34 @@ export default function Dashboard() {
   const [progress, setProgress] = useState(null)
   const [weeklyVolume, setWeeklyVolume] = useState([])
   const [upcoming, setUpcoming] = useState([])
-  const [gates, setGates] = useState([])
+  const [gates, setGates] = useState(null)
   const [recentLogged, setRecentLogged] = useState([])
   const [readiness, setReadiness] = useState(null)
   const noAPI = typeof window.electronAPI === 'undefined'
 
-  useEffect(() => {
+  function loadData() {
     if (noAPI) { setLoading(false); return }
+    setLoading(true)
     Promise.all([
       window.electronAPI.getPlan(),
       window.electronAPI.getProgressStats(),
       window.electronAPI.getWeeklyVolume(8),
       window.electronAPI.getUpcomingSessions(7),
       window.electronAPI.getReadinessGates(),
-      window.electronAPI.getLoggedSessions({ startDate: fourWeeksAgoStr() }),
+      window.electronAPI.getLoggedSessions({ startDate: fourWeeksAgoStr(), endDate: new Date().toISOString().slice(0, 10) }),
       window.electronAPI.getReadinessScore(),
     ]).then(([p, prog, vol, up, g, logged, rs]) => {
       setPlan(p)
       setProgress(prog)
       setWeeklyVolume(vol || [])
       setUpcoming(up || [])
-      setGates(g || [])
+      setGates(g || null)
       setRecentLogged(logged || [])
       setReadiness(rs || null)
-    }).catch(console.error).finally(() => setLoading(false))
-  }, [])
+    }).catch(err => console.error('Dashboard load error:', err)).finally(() => setLoading(false))
+  }
+
+  useEffect(() => { loadData() }, [])
 
   function fourWeeksAgoStr() {
     const d = new Date()
@@ -239,16 +242,29 @@ export default function Dashboard() {
     return <div className="loading">Loading dashboard...</div>
   }
 
+  const raceDate = plan?.race_date || '2027-07-25'
+  const raceDateDisplay = new Date(raceDate + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+
   return (
     <div>
-      <h1>Dashboard</h1>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0' }}>
+        <h1 style={{ marginBottom: 0 }}>Dashboard</h1>
+        <button
+          className="btn btn-secondary"
+          style={{ marginLeft: 'auto', fontSize: '12px', padding: '4px 12px' }}
+          onClick={loadData}
+          disabled={loading}
+        >
+          {loading ? 'Refreshing…' : '↺ Refresh'}
+        </button>
+      </div>
 
       {/* Top stats */}
       <div className="stat-grid">
         <div className="stat-card">
           <div className="stat-label">Days to Race</div>
           <div className="stat-value" style={{ color: 'var(--accent-blue)' }}>{daysToRace}</div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Jul 25, 2027</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{raceDateDisplay}</div>
         </div>
 
         <div className="stat-card">
@@ -284,7 +300,7 @@ export default function Dashboard() {
       {readiness && readiness.fueling && <FuelingStatusBar fueling={readiness.fueling} />}
 
       {/* Readiness gates */}
-      <ReadinessWidget gates={gates} />
+      <ReadinessWidget gates={gates} onRefresh={loadData} />
 
       {/* Weekly volume chart */}
       <div className="card" style={{ marginBottom: '24px' }}>
@@ -317,14 +333,26 @@ export default function Dashboard() {
           {upcoming.length === 0 ? (
             <div className="empty-state">No upcoming sessions</div>
           ) : (
-            upcoming.slice(0, 8).map(s => (
-              <SessionCard
-                key={s.id}
-                session={s}
-                showDate={true}
-                readinessTier={s.date === todayStr && readiness ? readiness.tier : null}
-              />
-            ))
+            upcoming.slice(0, 8).map(s => {
+              const done = recentLogged.some(l => l.date === s.date && l.discipline === s.discipline)
+              return (
+                <div key={s.id} style={{ position: 'relative', opacity: done ? 0.6 : 1 }}>
+                  {done && (
+                    <div style={{
+                      position: 'absolute', top: '8px', right: '8px', zIndex: 1,
+                      background: 'var(--accent-green)', color: '#fff',
+                      borderRadius: '4px', fontSize: '10px', fontWeight: 700,
+                      padding: '2px 6px', letterSpacing: '0.04em',
+                    }}>DONE</div>
+                  )}
+                  <SessionCard
+                    session={s}
+                    showDate={true}
+                    readinessTier={s.date === todayStr && readiness ? readiness.tier : null}
+                  />
+                </div>
+              )
+            })
           )}
         </div>
 

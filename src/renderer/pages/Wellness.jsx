@@ -1,359 +1,148 @@
 import React, { useState, useEffect } from 'react'
-// Sleep tier evaluation — inline to avoid renderer importing Node-only modules
-function evaluateSleepTier(history, today) {
+
+function evaluateSleepTier(history) {
   const isSleepPoor = (w) => !w || (w.sleep_hours != null && w.sleep_hours < 6) || (w.sleep_quality_1_5 != null && w.sleep_quality_1_5 <= 2)
   const recentSeven = history.slice(-7)
   const poorCount = recentSeven.filter(isSleepPoor).length
   const lastTwo = history.slice(-2)
   const consecutivePoor = lastTwo.length === 2 && lastTwo.every(isSleepPoor)
-  const todayPoor = isSleepPoor(today)
-  const hasPain = today && today.pain_flag
-  if (poorCount >= 4 && hasPain) return 'SEVERE'
   if (poorCount >= 4) return 'AMBER'
   if (consecutivePoor) return 'REDUCE'
-  if (todayPoor) return 'CAUTION'
+  if (isSleepPoor(history[history.length - 1])) return 'CAUTION'
   return 'OK'
 }
 
 const TIER_COLOR = {
-  OK: 'var(--accent-green)',
+  OK:      'var(--accent-green)',
   CAUTION: 'var(--accent-amber)',
-  REDUCE: 'var(--accent-amber)',
-  AMBER: '#f97316',
-  SEVERE: 'var(--accent-red)',
+  REDUCE:  'var(--accent-amber)',
+  AMBER:   '#f97316',
 }
 
 const TIER_DESC = {
-  OK: 'Sleep is good — proceed as planned.',
-  CAUTION: 'One poor night. Reduce intensity only on high-intensity sessions.',
-  REDUCE: '2+ consecutive poor nights. Reduce volume and intensity.',
-  AMBER: 'Persistent sleep debt. Hold progression; key sessions at 80%.',
-  SEVERE: 'Severe sleep debt + pain flag. Recovery day recommended.',
+  OK:      'Sleep is good — proceed as planned.',
+  CAUTION: 'One poor night. Reduce intensity on hard sessions today.',
+  REDUCE:  '2+ consecutive poor nights. Reduce volume and intensity.',
+  AMBER:   'Persistent sleep debt. Hold progression; key sessions at 80%.',
 }
 
-function today() {
-  const d = new Date()
-  return d.toISOString().slice(0, 10)
+function defaultRange() {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - 13)
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) }
 }
 
-function RatingSelect({ value, onChange, name }) {
+function QualityDots({ value }) {
+  if (value == null) return <span style={{ color: 'var(--text-muted)' }}>—</span>
+  const color = value >= 4 ? 'var(--accent-green)' : value >= 3 ? 'var(--accent-amber)' : '#f97316'
   return (
-    <select value={value || ''} onChange={e => onChange(e.target.value ? parseInt(e.target.value) : null)} name={name}>
-      <option value="">—</option>
-      {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
-    </select>
+    <span style={{ display: 'inline-flex', gap: '3px' }}>
+      {Array.from({ length: 5 }, (_, i) => (
+        <span key={i} style={{
+          width: '8px', height: '8px', borderRadius: '50%',
+          background: i < value ? color : 'var(--border)',
+        }} />
+      ))}
+    </span>
   )
 }
 
 export default function Wellness() {
   const noAPI = typeof window.electronAPI === 'undefined'
-  const todayStr = today()
-
-  const [form, setForm] = useState({
-    date: todayStr,
-    sleep_hours: '',
-    sleep_quality_1_5: null,
-    fatigue_1_5: null,
-    soreness_1_5: null,
-    pain_flag: false,
-    pain_notes: '',
-    motivation_1_5: null,
-    notes: '',
-    hunger: '',
-  })
-
+  const [range, setRange] = useState(defaultRange())
   const [history, setHistory] = useState([])
   const [sleepTier, setSleepTier] = useState('OK')
-  const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [sleepImportResult, setSleepImportResult] = useState(null)
-  const [sleepImporting, setSleepImporting] = useState(false)
 
-  useEffect(() => {
+  async function load(r) {
     if (noAPI) { setLoading(false); return }
-    Promise.all([
-      window.electronAPI.getWellness(todayStr),
-      window.electronAPI.getWellnessHistory(14),
-    ]).then(([todayEntry, hist]) => {
-      if (todayEntry) {
-        setForm({
-          date: todayEntry.date,
-          sleep_hours: todayEntry.sleep_hours ?? '',
-          sleep_quality_1_5: todayEntry.sleep_quality_1_5,
-          fatigue_1_5: todayEntry.fatigue_1_5,
-          soreness_1_5: todayEntry.soreness_1_5,
-          pain_flag: !!todayEntry.pain_flag,
-          pain_notes: todayEntry.pain_notes || '',
-          motivation_1_5: todayEntry.motivation_1_5,
-          notes: todayEntry.notes || '',
-          hunger: todayEntry.hunger || '',
-        })
-      }
-      setHistory(hist || [])
-      // Compute sleep tier from history + today
-      try {
-        const tier = evaluateSleepTier(hist || [], todayEntry || form)
-        setSleepTier(tier)
-      } catch {
-        setSleepTier('OK')
-      }
-    }).catch(console.error).finally(() => setLoading(false))
-  }, [])
-
-  function set(field, value) {
-    setForm(f => ({ ...f, [field]: value }))
+    const hist = await window.electronAPI.getWellnessHistory(r)
+    const sorted = (hist || []).slice().sort((a, b) => a.date.localeCompare(b.date))
+    setHistory(sorted)
+    try { setSleepTier(evaluateSleepTier(sorted)) }
+    catch { setSleepTier('OK') }
+    setLoading(false)
   }
 
-  async function handleSleepImport() {
-    if (noAPI) return
-    setSleepImporting(true)
-    setSleepImportResult(null)
-    try {
-      const filePath = await window.electronAPI.openFileDialog()
-      if (!filePath) { setSleepImporting(false); return }
-      const result = await window.electronAPI.importSleep(filePath)
-      setSleepImportResult(result)
-      if (!result.error) {
-        const hist = await window.electronAPI.getWellnessHistory(14)
-        setHistory(hist || [])
-        try {
-          const tier = evaluateSleepTier(hist || [], form)
-          setSleepTier(tier)
-        } catch { setSleepTier('OK') }
-      }
-    } catch (err) {
-      setSleepImportResult({ error: err.message })
-    } finally {
-      setSleepImporting(false)
-    }
-  }
+  useEffect(() => { load(range) }, [])
 
-  async function handleSave(e) {
-    e.preventDefault()
-    if (noAPI) return
-    const entry = {
-      ...form,
-      sleep_hours: form.sleep_hours !== '' ? parseFloat(form.sleep_hours) : null,
-    }
-    await window.electronAPI.saveWellness(entry)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+  function setStart(v) { const r = { ...range, start: v }; setRange(r); load(r) }
+  function setEnd(v)   { const r = { ...range, end: v };   setRange(r); load(r) }
 
-    const hist = await window.electronAPI.getWellnessHistory(14)
-    setHistory(hist || [])
-    try {
-      const tier = evaluateSleepTier(hist || [], entry)
-      setSleepTier(tier)
-    } catch { setSleepTier('OK') }
-  }
+  const avgHours = history.filter(h => h.sleep_hours != null).length > 0
+    ? (history.reduce((s, h) => s + (h.sleep_hours || 0), 0) / history.filter(h => h.sleep_hours != null).length).toFixed(1)
+    : null
+
+  if (loading) return <div className="loading">Loading...</div>
 
   return (
     <div>
-      <h1>Daily Wellness</h1>
+      <h1>Sleep Tracker</h1>
 
       {noAPI && (
         <div style={{ color: 'var(--accent-amber)', marginBottom: '16px', fontSize: '13px' }}>
-          Running outside Electron — wellness data unavailable.
+          Running outside Electron — data unavailable.
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-        {/* Check-in form */}
-        <div className="card">
-          <h2>Today's Check-in</h2>
-          <form onSubmit={handleSave}>
-            <div className="form-group">
-              <label>Date</label>
-              <input type="date" value={form.date} onChange={e => set('date', e.target.value)} />
-            </div>
-
-            <div className="form-group">
-              <label>Sleep Hours</label>
-              <input
-                type="number" min="0" max="12" step="0.5"
-                value={form.sleep_hours}
-                onChange={e => set('sleep_hours', e.target.value)}
-                placeholder="e.g. 7.5"
-              />
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div className="form-group">
-                <label>Sleep Quality (1–5)</label>
-                <RatingSelect value={form.sleep_quality_1_5} onChange={v => set('sleep_quality_1_5', v)} />
-              </div>
-              <div className="form-group">
-                <label>Fatigue (1–5)</label>
-                <RatingSelect value={form.fatigue_1_5} onChange={v => set('fatigue_1_5', v)} />
-              </div>
-              <div className="form-group">
-                <label>Soreness (1–5)</label>
-                <RatingSelect value={form.soreness_1_5} onChange={v => set('soreness_1_5', v)} />
-              </div>
-              <div className="form-group">
-                <label>Motivation (1–5)</label>
-                <RatingSelect value={form.motivation_1_5} onChange={v => set('motivation_1_5', v)} />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>Hunger Level</label>
-              <select value={form.hunger} onChange={e => set('hunger', e.target.value)}>
-                <option value="">— not logged —</option>
-                <option value="normal">Normal</option>
-                <option value="elevated">Elevated</option>
-                <option value="excessive">Excessive</option>
-              </select>
-            </div>
-
-            <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <input
-                type="checkbox" id="pain_flag"
-                checked={form.pain_flag}
-                onChange={e => set('pain_flag', e.target.checked)}
-                style={{ width: 'auto' }}
-              />
-              <label htmlFor="pain_flag" style={{ marginBottom: 0, cursor: 'pointer', color: form.pain_flag ? 'var(--accent-red)' : 'var(--text-muted)' }}>
-                Pain or injury concern
-              </label>
-            </div>
-
-            {form.pain_flag && (
-              <div className="form-group">
-                <label>Pain Notes</label>
-                <textarea
-                  value={form.pain_notes}
-                  onChange={e => set('pain_notes', e.target.value)}
-                  placeholder="Where, severity, what makes it worse..."
-                  rows={2}
-                />
-              </div>
-            )}
-
-            <div className="form-group">
-              <label>Notes (optional)</label>
-              <textarea
-                value={form.notes}
-                onChange={e => set('notes', e.target.value)}
-                placeholder="How are you feeling overall?"
-                rows={2}
-              />
-            </div>
-
-            <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-              {saved ? '✓ Saved' : 'Save Check-in'}
-            </button>
-          </form>
-        </div>
-
-        {/* Sleep tier + history */}
-        <div>
-          <div className="card" style={{ marginBottom: '16px' }}>
-            <h2>Recovery Status</h2>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px',
-            }}>
-              <div style={{
-                width: '14px', height: '14px', borderRadius: '50%',
-                background: TIER_COLOR[sleepTier] || 'var(--text-muted)',
-              }} />
-              <span style={{ fontWeight: 700, fontSize: '18px', color: TIER_COLOR[sleepTier] }}>
-                {sleepTier}
-              </span>
-            </div>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-              {TIER_DESC[sleepTier]}
-            </p>
+      <div className="card" style={{ marginBottom: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input type="date" value={range.start} onChange={e => setStart(e.target.value)} />
+            <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>to</span>
+            <input type="date" value={range.end} onChange={e => setEnd(e.target.value)} />
           </div>
 
-          <div className="card">
-            <h2>Last 14 Days</h2>
-            {history.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No wellness history yet.</div>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
-                      <th style={{ textAlign: 'left', padding: '6px 4px' }}>Date</th>
-                      <th style={{ padding: '6px 4px' }}>Sleep</th>
-                      <th style={{ padding: '6px 4px' }}>Qual</th>
-                      <th style={{ padding: '6px 4px' }}>Fat</th>
-                      <th style={{ padding: '6px 4px' }}>Sor</th>
-                      <th style={{ padding: '6px 4px' }}>Mot</th>
-                      <th style={{ padding: '6px 4px' }}>Hun</th>
-                      <th style={{ padding: '6px 4px' }}>Pain</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {history.map(h => (
-                      <tr key={h.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '5px 4px', color: 'var(--text-muted)' }}>{h.date}</td>
-                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>{h.sleep_hours ?? '—'}</td>
-                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>{h.sleep_quality_1_5 ?? '—'}</td>
-                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>{h.fatigue_1_5 ?? '—'}</td>
-                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>{h.soreness_1_5 ?? '—'}</td>
-                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>{h.motivation_1_5 ?? '—'}</td>
-                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>
-                          {h.hunger === 'excessive' ? <span style={{color:'var(--accent-red)'}}>E</span>
-                           : h.hunger === 'elevated' ? <span style={{color:'var(--accent-amber)'}}>↑</span>
-                           : h.hunger === 'normal' ? '✓' : '—'}
-                        </td>
-                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>
-                          {h.pain_flag ? <span style={{ color: 'var(--accent-red)' }}>⚠</span> : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '32px', alignItems: 'center' }}>
+            {avgHours != null && (
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '20px', fontWeight: 700 }}>{avgHours}h</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>avg sleep</div>
               </div>
             )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: TIER_COLOR[sleepTier], flexShrink: 0 }} />
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '15px', color: TIER_COLOR[sleepTier] }}>{sleepTier}</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{TIER_DESC[sleepTier]}</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Garmin sleep import */}
-      <div className="card" style={{ marginTop: '24px' }}>
-        <h2>Import Sleep from Garmin</h2>
-        <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-          Export from Garmin Connect → Health Stats → Sleep → Export. Supports 7-day and 1-day formats.
-        </p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          <button
-            className="btn btn-secondary"
-            onClick={handleSleepImport}
-            disabled={noAPI || sleepImporting}
-          >
-            {sleepImporting ? 'Importing...' : 'Choose Garmin Sleep CSV'}
-          </button>
+      {history.length === 0 ? (
+        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No sleep data for this range — import Garmin data to populate.</div>
+      ) : (
+        <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
+          <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', fontSize: '11px', textTransform: 'uppercase' }}>
+                <th style={{ textAlign: 'left', padding: '10px 14px' }}>Date</th>
+                <th style={{ textAlign: 'center', padding: '10px 8px' }}>Sleep</th>
+                <th style={{ textAlign: 'center', padding: '10px 8px' }}>Quality</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...history].reverse().map(h => {
+                const poor = (h.sleep_hours != null && h.sleep_hours < 6) || (h.sleep_quality_1_5 != null && h.sleep_quality_1_5 <= 2)
+                return (
+                  <tr key={h.id || h.date} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '8px 14px', color: 'var(--text-muted)' }}>{h.date}</td>
+                    <td style={{ padding: '8px 8px', textAlign: 'center', color: poor ? '#f97316' : 'var(--text-primary)', fontWeight: poor ? 600 : 400 }}>
+                      {h.sleep_hours ?? '—'}
+                    </td>
+                    <td style={{ padding: '8px 8px', textAlign: 'center' }}>
+                      <QualityDots value={h.sleep_quality_1_5} />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
-
-        {sleepImportResult && !sleepImportResult.error && (
-          <div style={{
-            marginTop: '12px', background: 'rgba(34,197,94,0.1)',
-            border: '1px solid var(--accent-green)', borderRadius: '8px', padding: '12px',
-          }}>
-            <span style={{ color: 'var(--accent-green)', fontWeight: 600 }}>
-              ✓ Imported {sleepImportResult.imported} day{sleepImportResult.imported !== 1 ? 's' : ''}
-            </span>
-            {sleepImportResult.dates && (
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '12px' }}>
-                {sleepImportResult.dates.join(', ')}
-              </span>
-            )}
-          </div>
-        )}
-
-        {sleepImportResult && sleepImportResult.error && (
-          <div style={{
-            marginTop: '12px', background: 'rgba(239,68,68,0.1)',
-            border: '1px solid var(--accent-red)', borderRadius: '8px', padding: '12px',
-            color: 'var(--accent-red)', fontSize: '13px',
-          }}>
-            ✗ {sleepImportResult.error}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   )
 }

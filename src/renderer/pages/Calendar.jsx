@@ -1,3 +1,4 @@
+'use strict'
 import React, { useState, useEffect } from 'react'
 
 const DISC_COLOR = {
@@ -10,7 +11,6 @@ const DISC_COLOR = {
 
 const DISC_LABEL = { swim: 'Swim', bike: 'Bike', run: 'Run', strength: 'Strength', race: 'Race', other: 'Other' }
 
-// YouTube search URLs — always resolve to current, relevant content
 const WORKOUT_LINKS = {
   'swim:technique':               { label: 'Watch: Swim Drills',          url: 'https://www.youtube.com/results?search_query=triathlon+swim+technique+drills' },
   'swim:aerobic_intervals':       { label: 'Watch: Swim Intervals',       url: 'https://www.youtube.com/results?search_query=triathlon+swim+aerobic+intervals+sets' },
@@ -33,7 +33,6 @@ const WORKOUT_LINKS = {
 }
 
 const WORKOUT_DESCRIPTIONS = {
-  // ── Swim ──────────────────────────────────────────────────────────────────
   'swim:technique': {
     goal: 'Build efficient stroke mechanics',
     execution: 'Focus on catch, pull, and rotation. Use drills: fingertip drag, catch-up, 6-kick switch. Keep effort easy (Zone 1–2). Quality over distance.',
@@ -46,7 +45,6 @@ const WORKOUT_DESCRIPTIONS = {
     goal: 'Extend time in the water at race-sustainable effort',
     execution: 'Continuous or broken swims at Zone 2 pace. Practice bilateral breathing and sighting every 10 strokes. Simulate open-water conditions where possible.',
   },
-  // ── Bike ──────────────────────────────────────────────────────────────────
   'bike:technique_indoor': {
     goal: 'Develop pedalling efficiency and bike feel',
     execution: 'Trainer session. Alternate 5-min blocks of 90+ rpm cadence drills with single-leg pedalling. Keep power low (Zone 1–2). Focus on smooth circles, not mashing.',
@@ -71,7 +69,6 @@ const WORKOUT_DESCRIPTIONS = {
     goal: 'Full dress rehearsal of race-day bike leg',
     execution: 'Ride LP course profile if possible. Execute exact race-day nutrition and pacing. Hold race power — resist the urge to push early. This is the most important training day of the plan.',
   },
-  // ── Run ───────────────────────────────────────────────────────────────────
   'run:easy': {
     goal: 'Aerobic maintenance and active recovery',
     execution: "Zone 2 heart rate — slow enough to hold a full conversation. If you feel the urge to speed up, slow down. This run supports the week's hard sessions, not the other way around.",
@@ -88,7 +85,6 @@ const WORKOUT_DESCRIPTIONS = {
     goal: 'Train the bike-to-run transition and overcome dead-leg sensation',
     execution: "Change shoes quickly, start running immediately. First 5–8 min will feel awful — that's normal. Settle into Zone 2. Practise your T2 nutrition cue: start fuelling within 2 min of running.",
   },
-  // ── Strength ──────────────────────────────────────────────────────────────
   'strength:foundation_strength': {
     goal: 'Build injury-resistant base strength and hip/core stability',
     execution: 'Focus: glute bridges, single-leg deadlifts, clamshells, plank variations, hip flexor mobility. 2–3 sets × 10–15 reps. Slow and controlled. No heavy loading yet.',
@@ -97,7 +93,6 @@ const WORKOUT_DESCRIPTIONS = {
     goal: 'Maintain neuromuscular strength without adding fatigue',
     execution: 'Short, targeted session. Single-leg squats, Romanian deadlifts, lateral band walks, core stability. 2 sets × 8–10 reps, moderate load. Done in 30–35 min — get in, get out.',
   },
-  // ── Race ──────────────────────────────────────────────────────────────────
   'race:ironman': {
     goal: 'IRONMAN Lake Placid 2027 — race day',
     execution: 'Swim 2.4mi → Bike 112mi → Run 26.2mi. Trust your training. Execute the nutrition plan you have practised all year. The first 6 hours are setup — the last 2 hours are the race.',
@@ -134,6 +129,156 @@ function formatHeaderDate(date) {
   return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+function formatShortDate(isoStr) {
+  const d = new Date(isoStr + 'T00:00:00Z')
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
+}
+
+// ─── Compliance engine ────────────────────────────────────────────────────────
+
+// Weights: KEY = 10, Supporting = 4, Optional = 1
+const W = { key: 10, supporting: 4, optional: 1 }
+
+// Strict thresholds: done ≥85%, partial 50–84% (25% credit), <50% = 0
+function sessionCredit(pct) {
+  if (pct >= 0.85) return 1.0
+  if (pct >= 0.50) return 0.25
+  return 0
+}
+
+function letterGrade(score) {
+  if (score >= 90) return 'A'
+  if (score >= 75) return 'B'
+  if (score >= 60) return 'C'
+  if (score >= 45) return 'D'
+  return 'F'
+}
+
+function gradeColor(score) {
+  if (score >= 90) return 'var(--accent-green)'
+  if (score >= 75) return '#86efac'
+  if (score >= 60) return 'var(--accent-amber)'
+  if (score >= 45) return '#fb923c'
+  return '#ef4444'
+}
+
+function computeWeekCompliance(days, todayISO) {
+  // ── Step 1: flatten all planned + logged sessions for the week ──────────────
+  const allPlanned = []
+  const allLogged  = []
+
+  for (const { date, dateStr, planned, done } of days) {
+    for (const p of planned) allPlanned.push({ ...p, dateStr, date })
+    for (const d of done)    allLogged.push({ ...d, dateStr, date })
+  }
+
+  const pastPlanned   = allPlanned.filter(p => p.dateStr <= todayISO)
+  const futurePlanned = allPlanned.filter(p => p.dateStr >  todayISO)
+
+  // ── Step 2: week-wide greedy matching ──────────────────────────────────────
+  // KEY sessions get first pick. Within same importance, sort by target_duration
+  // descending so longer sessions claim their best match before shorter ones.
+  const sorted = [...pastPlanned].sort((a, b) => {
+    const imp = { key: 0, supporting: 1, optional: 2 }
+    const di = (imp[a.importance] ?? 3) - (imp[b.importance] ?? 3)
+    if (di !== 0) return di
+    return b.target_duration - a.target_duration
+  })
+
+  const usedLoggedIds = new Set()
+  const matchedRows = []
+
+  for (const p of sorted) {
+    // Find the week's logged sessions with the same discipline not yet claimed
+    const candidates = allLogged.filter(
+      d => d.discipline === p.discipline && !usedLoggedIds.has(d.id)
+    )
+    let matched = null
+    if (candidates.length > 0) {
+      matched = candidates.reduce((best, d) =>
+        Math.abs(d.duration - p.target_duration) < Math.abs(best.duration - p.target_duration) ? d : best
+      )
+      usedLoggedIds.add(matched.id)
+    }
+
+    let status = 'missed', pct = 0
+    if (matched) {
+      pct    = matched.duration / p.target_duration
+      status = pct >= 0.85 ? 'done' : pct >= 0.50 ? 'partial' : 'low'
+    }
+    matchedRows.push({ dateStr: p.dateStr, date: p.date, planned: p, matched, status, pct })
+  }
+
+  // ── Step 3: future sessions → pending ──────────────────────────────────────
+  for (const p of futurePlanned) {
+    matchedRows.push({ dateStr: p.dateStr, date: p.date, planned: p, matched: null, status: 'pending', pct: null })
+  }
+
+  // ── Step 4: unclaimed logged sessions → extras ─────────────────────────────
+  for (const d of allLogged) {
+    if (!usedLoggedIds.has(d.id)) {
+      matchedRows.push({ dateStr: d.dateStr, date: d.date, planned: null, matched: d, status: 'extra', pct: null })
+    }
+  }
+
+  // Sort by planned date (or logged date for extras), then by discipline
+  matchedRows.sort((a, b) => {
+    const da = a.planned?.dateStr ?? a.matched?.dateStr ?? a.dateStr
+    const db = b.planned?.dateStr ?? b.matched?.dateStr ?? b.dateStr
+    return da.localeCompare(db)
+  })
+
+  // ── Step 5: score (past/today only) ────────────────────────────────────────
+  let earned = 0, maxPts = 0, pendingPts = 0
+  let keyDone = 0, keyTotal = 0, supDone = 0, supTotal = 0, optDone = 0, optTotal = 0
+
+  for (const r of matchedRows) {
+    if (!r.planned) continue
+    const w = W[r.planned.importance] || 1
+
+    if (r.status === 'pending') {
+      pendingPts += w
+      if (r.planned.importance === 'key') keyTotal++
+      else if (r.planned.importance === 'supporting') supTotal++
+      else optTotal++
+      continue
+    }
+
+    maxPts += w
+    const credit = sessionCredit(r.pct ?? 0)
+    earned += w * credit
+    const full = credit >= 1.0
+    if (r.planned.importance === 'key')       { keyTotal++; if (full) keyDone++ }
+    else if (r.planned.importance === 'supporting') { supTotal++; if (full) supDone++ }
+    else                                       { optTotal++; if (full) optDone++ }
+  }
+
+  const score = maxPts > 0 ? Math.round(earned / maxPts * 100) : null
+  const grade = score !== null ? letterGrade(score) : null
+  const color = score !== null ? gradeColor(score) : 'var(--text-muted)'
+
+  return {
+    rows: matchedRows, score, grade, color,
+    earned, maxPts, pendingPts, hasPending: pendingPts > 0,
+    keyDone, keyTotal, supDone, supTotal, optDone, optTotal,
+  }
+}
+
+function StatusBadge({ status }) {
+  const styles = {
+    done:    { color: 'var(--accent-green)', label: '✓ Done' },
+    partial: { color: 'var(--accent-amber)', label: '~ Partial' },
+    low:     { color: '#fb923c',             label: '⚠ Low' },
+    missed:  { color: '#ef4444',             label: '✗ Missed' },
+    pending: { color: 'var(--text-muted)',   label: '· Pending' },
+    extra:   { color: 'var(--accent-blue)',  label: '+ Extra' },
+  }
+  const s = styles[status] || styles.extra
+  return (
+    <span style={{ fontSize: '12px', fontWeight: 600, color: s.color }}>{s.label}</span>
+  )
+}
+
 export default function Calendar() {
   const [weekOffset, setWeekOffset] = useState(null)
   const [sessions, setSessions] = useState([])
@@ -145,7 +290,6 @@ export default function Calendar() {
   const today = new Date()
   const baseMonday = getMondayOf(today)
 
-  // On first load, jump to the plan's first week if today is before plan start
   useEffect(() => {
     if (noAPI) { setWeekOffset(0); return }
     window.electronAPI.getPlan().then(plan => {
@@ -154,7 +298,6 @@ export default function Calendar() {
         const planMonday = getMondayOf(planStart)
         const diffMs = planMonday.getTime() - baseMonday.getTime()
         const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000))
-        // If today is before plan start, jump to plan's first week
         setWeekOffset(diffWeeks > 0 ? diffWeeks : 0)
       } else {
         setWeekOffset(0)
@@ -189,10 +332,13 @@ export default function Calendar() {
     return { date: d, dateStr, planned, done, isToday }
   })
 
+  const todayISO = toISO(today)
+  const compliance = computeWeekCompliance(days, todayISO)
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' }}>
-        <h1 style={{ marginBottom: 0 }}>Training Calendar</h1>
+        <h1 style={{ marginBottom: 0 }}>Training Planner</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button className="btn btn-secondary" onClick={() => setWeekOffset(o => o - 1)}>← Prev</button>
           <span style={{ fontSize: '14px', color: 'var(--text-muted)', minWidth: '180px', textAlign: 'center' }}>
@@ -243,7 +389,18 @@ export default function Calendar() {
                 </div>
 
                 {planned.length === 0 ? (
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rest</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {done.length > 0 ? (
+                      done.map(d => (
+                        <div key={d.id} style={{ marginBottom: '4px' }}>
+                          <span style={{ color: DISC_COLOR[d.discipline] || 'var(--text-muted)' }}>
+                            {DISC_LABEL[d.discipline] || d.discipline}
+                          </span>
+                          <span style={{ color: 'var(--text-muted)', marginLeft: '4px' }}>{d.duration}m</span>
+                        </div>
+                      ))
+                    ) : 'Rest'}
+                  </div>
                 ) : (
                   planned.map(s => (
                     <div key={s.id} style={{ marginBottom: '6px' }}>
@@ -282,7 +439,7 @@ export default function Calendar() {
             ))}
           </div>
 
-          {/* Full-width detail panel */}
+          {/* Workout detail panel */}
           {expanded && (() => {
             const day = days.find(d => d.dateStr === expanded)
             if (!day || day.planned.length === 0) return null
@@ -352,6 +509,170 @@ export default function Calendar() {
               </div>
             )
           })()}
+
+          {/* ── Weekly Compliance Panel ──────────────────────────────────── */}
+          {compliance.rows.length > 0 && (
+            <div className="card" style={{ marginTop: '24px', padding: '20px' }}>
+
+              {/* Header row: score + key stats */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+                    Week Compliance{compliance.hasPending ? ' (so far)' : ''}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                    <div style={{ fontSize: '32px', fontWeight: 800, color: compliance.color, lineHeight: 1 }}>
+                      {compliance.score !== null ? `${compliance.score}%` : '—'}
+                    </div>
+                    {compliance.grade && (
+                      <div style={{
+                        fontSize: '24px', fontWeight: 900, color: compliance.color,
+                        background: `${compliance.color}22`, borderRadius: '6px',
+                        padding: '0 8px', lineHeight: '1.4',
+                      }}>
+                        {compliance.grade}
+                      </div>
+                    )}
+                  </div>
+                  {compliance.hasPending && compliance.score !== null && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      {compliance.pendingPts} pts still available
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                  {compliance.keyTotal > 0 && (
+                    <div style={{
+                      padding: '8px 14px', borderRadius: '8px',
+                      background: compliance.keyDone === compliance.keyTotal ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                      border: `1px solid ${compliance.keyDone === compliance.keyTotal ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                    }}>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>KEY Sessions</div>
+                      <div style={{ fontSize: '18px', fontWeight: 700, color: compliance.keyDone === compliance.keyTotal ? 'var(--accent-green)' : '#ef4444' }}>
+                        {compliance.keyDone}/{compliance.keyTotal}
+                      </div>
+                    </div>
+                  )}
+                  {compliance.supTotal > 0 && (
+                    <div style={{
+                      padding: '8px 14px', borderRadius: '8px',
+                      background: 'rgba(148,163,184,0.06)', border: '1px solid var(--border)',
+                    }}>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>Supporting</div>
+                      <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {compliance.supDone}/{compliance.supTotal}
+                      </div>
+                    </div>
+                  )}
+                  {compliance.optTotal > 0 && (
+                    <div style={{
+                      padding: '8px 14px', borderRadius: '8px',
+                      background: 'rgba(148,163,184,0.06)', border: '1px solid var(--border)',
+                    }}>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>Optional</div>
+                      <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-muted)' }}>
+                        {compliance.optDone}/{compliance.optTotal}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Session-by-session table */}
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Day</th>
+                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Planned</th>
+                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Logged</th>
+                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Gap</th>
+                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {compliance.rows.map((r, i) => {
+                      const isKeyMiss = r.planned?.importance === 'key' && (r.status === 'missed' || r.status === 'low')
+                      const isPending = r.status === 'pending'
+                      const rowBg = isKeyMiss ? 'rgba(239,68,68,0.06)'
+                        : isPending ? 'rgba(148,163,184,0.04)'
+                        : i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'
+                      const plannedMin = r.planned?.target_duration ?? null
+                      const loggedMin  = r.matched?.duration ?? null
+                      const gap = (!isPending && plannedMin !== null && loggedMin !== null)
+                        ? loggedMin - plannedMin : null
+                      const gapLabel = isPending ? '—'
+                        : gap === null ? (r.status === 'missed' || r.status === 'low') ? `-${plannedMin}m` : '—'
+                        : gap === 0 ? 'On target'
+                        : gap > 0 ? `+${gap}m`
+                        : `${gap}m`
+                      const gapColor = isPending ? 'var(--text-muted)'
+                        : gap === null ? (r.status === 'missed' ? '#ef4444' : r.status === 'low' ? '#fb923c' : 'var(--text-muted)')
+                        : gap >= 0 ? 'var(--accent-green)'
+                        : gap >= -plannedMin * 0.15 ? 'var(--accent-amber)'
+                        : '#ef4444'
+
+                      return (
+                        <tr key={i} style={{ background: rowBg, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <td style={{ padding: '9px 10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', fontSize: '12px' }}>
+                            {formatShortDate(r.dateStr)}
+                          </td>
+                          <td style={{ padding: '9px 10px' }}>
+                            {r.planned ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: DISC_COLOR[r.planned.discipline] || 'var(--text-muted)', fontWeight: 600 }}>
+                                  {DISC_LABEL[r.planned.discipline] || r.planned.discipline}
+                                </span>
+                                <span style={{ color: 'var(--text-muted)' }}>{r.planned.target_duration}m</span>
+                                {r.planned.importance === 'key' && (
+                                  <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent-blue)', background: 'rgba(59,130,246,0.15)', padding: '1px 5px', borderRadius: '4px' }}>
+                                    KEY
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '9px 10px' }}>
+                            {r.matched ? (
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ color: DISC_COLOR[r.matched.discipline] || 'var(--text-muted)', fontWeight: 600 }}>
+                                    {DISC_LABEL[r.matched.discipline] || r.matched.discipline}
+                                  </span>
+                                  <span style={{ color: 'var(--text-muted)' }}>{r.matched.duration}m</span>
+                                  {r.matched.notes ? (
+                                    <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontStyle: 'italic' }}>
+                                      {r.matched.notes.length > 24 ? r.matched.notes.slice(0, 24) + '…' : r.matched.notes}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {r.planned && r.matched.dateStr !== r.planned.dateStr && (
+                                  <div style={{ fontSize: '10px', color: 'var(--accent-amber)', marginTop: '2px' }}>
+                                    done {formatShortDate(r.matched.dateStr)}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '9px 10px', fontWeight: 600, color: gapColor, fontSize: '12px' }}>
+                            {gapLabel}
+                          </td>
+                          <td style={{ padding: '9px 10px' }}>
+                            <StatusBadge status={r.status} />
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
