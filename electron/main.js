@@ -8,10 +8,7 @@ const fs = require('fs')
 const isDev = process.env.NODE_ENV !== 'production'
 
 function getDbPath() {
-  if (isDev) {
-    return path.join(__dirname, '../data/ironman.db')
-  }
-  return path.join(app.getPath('userData'), 'ironman.db')
+  return path.join(__dirname, '../data/ironman.db')
 }
 
 // Ensure data directory exists in dev
