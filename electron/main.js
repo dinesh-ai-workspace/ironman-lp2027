@@ -1120,6 +1120,93 @@ ipcMain.handle('readiness:overrides:clear', (event, gate) => {
   return { ok: true }
 })
 
+// ─── IPC: stats:heatmap ──────────────────────────────────────────────────
+ipcMain.handle('stats:heatmap', () => {
+  const PLAN_START = new Date('2026-09-14T00:00:00Z')
+  const TOTAL_WEEKS = 45
+  const now = new Date()
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  const todayStr = todayUTC.toISOString().slice(0, 10)
+  const currentWeek = Math.max(1, Math.floor((todayUTC - PLAN_START) / (7 * 24 * 60 * 60 * 1000)) + 1)
+
+  const activePlan = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
+  const planId = activePlan?.id || -1
+
+  // Same weights as frontend Calendar compliance
+  const IMP_W = { key: 10, supporting: 4, optional: 1 }
+
+  function sessionCredit(pct) {
+    if (pct >= 0.85) return 1.0
+    if (pct >= 0.50) return 0.25
+    return 0
+  }
+
+  function computeScore(plannedRows, loggedRows, cutoffDate) {
+    // Only score past/today planned sessions
+    const past = plannedRows.filter(p => p.date <= cutoffDate)
+    if (past.length === 0) return null
+
+    // Sort: key first, then by target_duration desc (same greedy order as frontend)
+    const impOrder = { key: 0, supporting: 1, optional: 2 }
+    const sorted = [...past].sort((a, b) => {
+      const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
+      return di !== 0 ? di : b.target_duration - a.target_duration
+    })
+
+    const usedIds = new Set()
+    let earned = 0, maxPts = 0
+
+    for (const p of sorted) {
+      const w = IMP_W[p.importance] || 1
+      maxPts += w
+      const candidates = loggedRows.filter(l => l.discipline === p.discipline && !usedIds.has(l.id))
+      if (candidates.length === 0) continue
+      const best = candidates.reduce((b, l) =>
+        Math.abs(l.duration - p.target_duration) < Math.abs(b.duration - p.target_duration) ? l : b
+      )
+      usedIds.add(best.id)
+      const pct = best.duration / p.target_duration
+      earned += w * sessionCredit(pct)
+    }
+
+    return maxPts > 0 ? Math.round(earned / maxPts * 100) : null
+  }
+
+  const weeks = []
+  for (let wk = 1; wk <= TOTAL_WEEKS; wk++) {
+    const wkStart = new Date(PLAN_START)
+    wkStart.setUTCDate(wkStart.getUTCDate() + (wk - 1) * 7)
+    const wkEnd = new Date(wkStart)
+    wkEnd.setUTCDate(wkEnd.getUTCDate() + 6)
+    const startStr = wkStart.toISOString().slice(0, 10)
+    const endStr   = wkEnd.toISOString().slice(0, 10)
+
+    const plannedRows = db.prepare(
+      'SELECT discipline, target_duration, importance, date FROM planned_sessions WHERE plan_id=? AND date>=? AND date<=?'
+    ).all(planId, startStr, endStr)
+
+    const loggedRows = db.prepare(
+      'SELECT id, discipline, duration FROM logged_sessions WHERE date>=? AND date<=?'
+    ).all(startStr, endStr)
+
+    const volumeMin = loggedRows.reduce((s, r) => s + (r.duration || 0), 0)
+    const isFuture  = wk > currentWeek
+    const isCurrent = wk === currentWeek
+
+    const score = isFuture ? null : computeScore(plannedRows, loggedRows, todayStr)
+
+    weeks.push({
+      weekNum: wk, startStr, endStr,
+      planned: plannedRows.length,
+      logged: loggedRows.length,
+      score,
+      volumeMin,
+      isFuture, isCurrent,
+    })
+  }
+  return { weeks, currentWeek }
+})
+
 // ─── IPC: stats:progress ─────────────────────────────────────────────────
 ipcMain.handle('stats:progress', () => {
   const longestSwim = db.prepare(`
@@ -1200,8 +1287,10 @@ ipcMain.handle('stats:readiness-score', () => {
     }
   }
 
-  // Today's wellness row (sleep logged this morning = last night)
-  const todayRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today) || {}
+  // Today's wellness row — fall back to yesterday since Garmin dates sleep to the night it started
+  const todayRow = db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(today)
+    || db.prepare('SELECT * FROM daily_wellness WHERE date = ?').get(yesterday)
+    || {}
 
   // 28-day historical rows for HRV/RHR baseline
   const histRows = db.prepare('SELECT notes FROM daily_wellness WHERE date >= ? AND date < ? ORDER BY date').all(lookback28, today)
@@ -1252,13 +1341,13 @@ ipcMain.handle('stats:readiness-score', () => {
     durPts = Math.min(sleepHours / 8, 1) * 20
   } else {
     durPts = 15  // neutral
-    sleepGaps.push('No sleep duration logged — enter last night\'s sleep in Wellness tab')
+    sleepGaps.push('No sleep data — import Garmin data to populate')
   }
   if (sleepQuality != null) {
     qualPts = (sleepQuality / 5) * 10
   } else {
     qualPts = 5  // neutral
-    if (sleepHasData) sleepGaps.push('No sleep quality logged — rate your sleep quality in Wellness tab')
+    if (sleepHasData) sleepGaps.push('No sleep quality score in Garmin export')
   }
   const sleepPts = durPts + qualPts
 
@@ -1768,10 +1857,9 @@ ipcMain.handle('nutrition:import-mfp', (event, filePath) => {
         if (!date || !meal) { skipped_invalid++; continue }
         if (skipMeals.includes(meal)) continue  // totals rows — skip silently
 
-        const existing = db.prepare(
-          'SELECT id FROM nutrition_logs WHERE date=? AND meal=? AND source=?'
-        ).get(date, meal, 'csv_myfitnesspal')
-        if (existing) { skipped_duplicates++; continue }
+        // Delete existing row for this date+meal so reimporting always reflects latest MFP data
+        db.prepare('DELETE FROM nutrition_logs WHERE date=? AND meal=? AND source=?')
+          .run(date, meal, 'csv_myfitnesspal')
 
         stmt.run({
           date,

@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWeeklyVolume: (weeks) => ipcRenderer.invoke('stats:weekly-volume', weeks),
   getUpcomingSessions: (days) => ipcRenderer.invoke('stats:upcoming', days),
   getReadinessGates: () => ipcRenderer.invoke('stats:readiness'),
+  getHeatmap: () => ipcRenderer.invoke('stats:heatmap'),
   setReadinessOverride: (gate, status, note) => ipcRenderer.invoke('readiness:overrides:set', gate, status, note),
   clearReadinessOverride: (gate) => ipcRenderer.invoke('readiness:overrides:clear', gate),
   getProgressStats: () => ipcRenderer.invoke('stats:progress'),

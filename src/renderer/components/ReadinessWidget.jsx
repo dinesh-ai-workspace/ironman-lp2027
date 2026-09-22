@@ -1,5 +1,64 @@
 import React, { useState } from 'react'
 
+const CHECKPOINTS = [8, 16, 24, 28, 32, 36]
+
+const SWIM_T = { 8: 1.0, 16: 1.5, 24: 2.0, 28: 2.5, 32: 3.0, 36: 3.8 }
+const BIKE_T = { 8: 120, 16: 180, 24: 240, 28: 270, 32: 300, 36: 330 }
+const RUN_T  = { 8: 8,   16: 10,  24: 12,  28: 14,  32: 15,  36: 16  }
+
+function RoadmapRow({ label, targets, actual, unit, currentCpWeek, weekNum }) {
+  const fmt = v => unit === 'min'
+    ? `${Math.floor(v / 60)}h${v % 60 > 0 ? (v % 60) + 'm' : ''}`
+    : `${v}${unit}`
+
+  return (
+    <tr>
+      <td style={{ padding: '6px 10px 6px 0', fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        {label}
+        {actual != null && (
+          <span style={{ marginLeft: '6px', fontSize: '11px', color: 'var(--accent-blue)' }}>
+            ({fmt(actual)} now)
+          </span>
+        )}
+      </td>
+      {CHECKPOINTS.map(cp => {
+        const target = targets[cp]
+        const isCurrent = cp === currentCpWeek
+        const isPast = cp < currentCpWeek || (cp === currentCpWeek && weekNum > cp)
+        const achieved = actual != null && actual >= target
+
+        let cellColor = 'var(--text-muted)'
+        let cellBg = 'transparent'
+        let fontWeight = 400
+
+        if (isCurrent) {
+          cellBg = 'rgba(59,130,246,0.08)'
+          fontWeight = 700
+          cellColor = achieved ? 'var(--accent-green)' : 'var(--text-primary)'
+        } else if (isPast) {
+          cellColor = achieved ? 'var(--accent-green)' : '#f97316'
+          fontWeight = 500
+        }
+
+        return (
+          <td key={cp} style={{
+            padding: '6px 8px', textAlign: 'center', fontSize: '12px',
+            fontWeight, color: cellColor,
+            background: cellBg, borderRadius: isCurrent ? '4px' : 0,
+          }}>
+            {fmt(target)}
+            {isPast && actual != null && (
+              <div style={{ fontSize: '9px', marginTop: '1px', color: achieved ? 'var(--accent-green)' : '#f97316' }}>
+                {achieved ? '✓' : '✗'}
+              </div>
+            )}
+          </td>
+        )
+      })}
+    </tr>
+  )
+}
+
 const STATUS_COLOR = {
   green:  'var(--accent-green)',
   amber:  'var(--accent-amber)',
@@ -262,6 +321,42 @@ export default function ReadinessWidget({ gates, onRefresh }) {
           <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '8px' }}>
             {overallReason}
           </span>
+        </div>
+      </div>
+
+      {/* Full checkpoint roadmap */}
+      <div style={{ marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>
+          Full Roadmap — Checkpoint Targets
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', padding: '4px 10px 8px 0', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}></th>
+                {CHECKPOINTS.map(cp => (
+                  <th key={cp} style={{
+                    textAlign: 'center', padding: '4px 8px 8px',
+                    fontSize: '11px', fontWeight: cp === checkpointWeek ? 700 : 400,
+                    color: cp === checkpointWeek ? 'var(--accent-blue)' : 'var(--text-muted)',
+                  }}>
+                    W{cp}
+                    {cp === checkpointWeek && (
+                      <div style={{ fontSize: '9px', color: 'var(--accent-blue)' }}>▲ now</div>
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <RoadmapRow label="Swim (km)" targets={SWIM_T} actual={g.swim.actual} unit="km"  currentCpWeek={checkpointWeek} weekNum={weekNum} />
+              <RoadmapRow label="Bike"      targets={BIKE_T} actual={g.bike.actual} unit="min" currentCpWeek={checkpointWeek} weekNum={weekNum} />
+              <RoadmapRow label="Run (mi)"  targets={RUN_T}  actual={g.run.actual}  unit="mi"  currentCpWeek={checkpointWeek} weekNum={weekNum} />
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>
+          Blue column = current target checkpoint &nbsp;·&nbsp; ✓/✗ = achieved vs missed at past checkpoints
         </div>
       </div>
     </div>

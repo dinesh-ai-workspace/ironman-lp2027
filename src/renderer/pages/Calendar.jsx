@@ -279,12 +279,15 @@ function StatusBadge({ status }) {
   )
 }
 
+const PLAN_START_DATE = new Date('2026-09-14T00:00:00Z')
+
 export default function Calendar() {
   const [weekOffset, setWeekOffset] = useState(null)
   const [sessions, setSessions] = useState([])
   const [logged, setLogged] = useState([])
-  const [expanded, setExpanded] = useState(null)
+  const [expandedRow, setExpandedRow] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [heatmap, setHeatmap] = useState(null)
   const noAPI = typeof window.electronAPI === 'undefined'
 
   const today = new Date()
@@ -305,10 +308,22 @@ export default function Calendar() {
     }).catch(() => setWeekOffset(0))
   }, [])
 
+  useEffect(() => {
+    if (noAPI) return
+    window.electronAPI.getHeatmap()
+      .then(data => setHeatmap(data))
+      .catch(console.error)
+  }, [])
+
   const displayMonday = weekOffset !== null ? addDays(baseMonday, weekOffset * 7) : baseMonday
   const displaySunday = addDays(displayMonday, 6)
   const weekStartStr = toISO(displayMonday)
   const weekEndStr = toISO(displaySunday)
+
+  // Which plan week number is currently shown in the week detail
+  const selectedWeekNum = weekOffset !== null
+    ? Math.floor((displayMonday - PLAN_START_DATE) / (7 * 24 * 60 * 60 * 1000)) + 1
+    : null
 
   useEffect(() => {
     if (weekOffset === null) return
@@ -337,12 +352,14 @@ export default function Calendar() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' }}>
+      {/* ── Header with nav ─────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
         <h1 style={{ marginBottom: 0 }}>Training Planner</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button className="btn btn-secondary" onClick={() => setWeekOffset(o => o - 1)}>← Prev</button>
-          <span style={{ fontSize: '14px', color: 'var(--text-muted)', minWidth: '180px', textAlign: 'center' }}>
-            {weekStartStr} – {weekEndStr}
+          <span style={{ fontSize: '14px', color: 'var(--text-muted)', minWidth: '200px', textAlign: 'center' }}>
+            {selectedWeekNum !== null && selectedWeekNum >= 1 && selectedWeekNum <= 45
+              ? `W${selectedWeekNum} · ` : ''}{weekStartStr} – {weekEndStr}
           </span>
           <button className="btn btn-secondary" onClick={() => setWeekOffset(o => o + 1)}>Next →</button>
           {weekOffset !== 0 && (
@@ -350,6 +367,17 @@ export default function Calendar() {
           )}
         </div>
       </div>
+
+      {/* ── Season heatmap ──────────────────────────────────────────────── */}
+      {heatmap && (
+        <div className="card" style={{ marginBottom: '20px', padding: '16px' }}>
+          <TrainingHeatmap
+            data={heatmap}
+            selectedWeek={selectedWeekNum}
+            onWeekClick={wk => setWeekOffset(wk - heatmap.currentWeek)}
+          />
+        </div>
+      )}
 
       {noAPI && (
         <div style={{ color: 'var(--accent-amber)', marginBottom: '16px', fontSize: '13px' }}>
@@ -360,161 +388,12 @@ export default function Calendar() {
       {loading ? (
         <div style={{ color: 'var(--text-muted)' }}>Loading...</div>
       ) : (
-        <>
-          {/* 7-day grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '12px' }}>
-            {days.map(({ date, dateStr, planned, done, isToday }) => (
-              <div
-                key={dateStr}
-                className="card"
-                style={{
-                  minHeight: '160px',
-                  borderColor: expanded === dateStr ? 'var(--accent-blue)' : isToday ? 'var(--accent-blue)' : 'var(--border)',
-                  borderWidth: expanded === dateStr ? '2px' : '1px',
-                  padding: '12px',
-                  cursor: planned.length > 0 ? 'pointer' : 'default',
-                }}
-                onClick={() => planned.length > 0 && setExpanded(expanded === dateStr ? null : dateStr)}
-              >
-                <div style={{
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  color: isToday ? 'var(--accent-blue)' : 'var(--text-muted)',
-                  marginBottom: '8px',
-                }}>
-                  {formatHeaderDate(date)}
-                  {done.length > 0 && (
-                    <span style={{ marginLeft: '6px', color: 'var(--accent-green)' }}>✓</span>
-                  )}
-                </div>
-
-                {planned.length === 0 ? (
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    {done.length > 0 ? (
-                      done.map(d => (
-                        <div key={d.id} style={{ marginBottom: '4px' }}>
-                          <span style={{ color: DISC_COLOR[d.discipline] || 'var(--text-muted)' }}>
-                            {DISC_LABEL[d.discipline] || d.discipline}
-                          </span>
-                          <span style={{ color: 'var(--text-muted)', marginLeft: '4px' }}>{d.duration}m</span>
-                        </div>
-                      ))
-                    ) : 'Rest'}
-                  </div>
-                ) : (
-                  planned.map(s => (
-                    <div key={s.id} style={{ marginBottom: '6px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 500 }}>
-                        <div style={{
-                          width: '8px', height: '8px', borderRadius: '50%',
-                          background: DISC_COLOR[s.discipline] || 'var(--text-muted)',
-                          flexShrink: 0,
-                        }} />
-                        <span style={{ color: DISC_COLOR[s.discipline] }}>
-                          {DISC_LABEL[s.discipline] || s.discipline}
-                        </span>
-                        <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                          {s.target_duration}m
-                        </span>
-                      </div>
-                      {s.importance === 'key' && (
-                        <div style={{ fontSize: '10px', color: 'var(--accent-blue)', marginLeft: '14px' }}>Priority</div>
-                      )}
-                      {s.importance === 'supporting' && (
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '14px' }}>Base</div>
-                      )}
-                      {s.importance === 'optional' && (
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '14px', opacity: 0.6 }}>Optional</div>
-                      )}
-                    </div>
-                  ))
-                )}
-
-                {planned.length > 0 && (
-                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px', opacity: 0.5 }}>
-                    {expanded === dateStr ? '▲ close' : '▼ details'}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Workout detail panel */}
-          {expanded && (() => {
-            const day = days.find(d => d.dateStr === expanded)
-            if (!day || day.planned.length === 0) return null
-            return (
-              <div className="card" style={{ marginTop: '16px', padding: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                  <h3 style={{ margin: 0, fontSize: '15px' }}>{formatHeaderDate(day.date)} — Workout Detail</h3>
-                  <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 10px' }} onClick={() => setExpanded(null)}>Close</button>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px' }}>
-                  {day.planned.map(s => {
-                    const desc = WORKOUT_DESCRIPTIONS[`${s.discipline}:${s.type}`]
-                    const color = DISC_COLOR[s.discipline] || 'var(--text-muted)'
-                    return (
-                      <div key={`detail-${s.id}`} style={{
-                        padding: '14px 16px',
-                        background: 'rgba(255,255,255,0.03)',
-                        borderRadius: '10px',
-                        borderLeft: `4px solid ${color}`,
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                          <span style={{ fontWeight: 700, fontSize: '13px', color }}>
-                            {DISC_LABEL[s.discipline] || s.discipline}
-                          </span>
-                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                            {s.target_duration} min · Zone {s.target_intensity_zone}
-                          </span>
-                          {s.importance === 'key' && <span className="badge badge-blue">Priority</span>}
-                          {s.importance === 'supporting' && <span className="badge" style={{ background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)' }}>Base</span>}
-                          {s.importance === 'optional' && <span className="badge" style={{ background: 'rgba(148,163,184,0.08)', color: 'var(--text-muted)' }}>Optional</span>}
-                        </div>
-                        {desc ? (
-                          <>
-                            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>
-                              🎯 {desc.goal}
-                            </div>
-                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.7, marginBottom: '10px' }}>
-                              {desc.execution}
-                            </div>
-                            {WORKOUT_LINKS[`${s.discipline}:${s.type}`] && (
-                              <button
-                                className="btn btn-secondary"
-                                style={{ fontSize: '11px', padding: '4px 10px' }}
-                                onClick={e => {
-                                  e.stopPropagation()
-                                  window.electronAPI.openExternal(WORKOUT_LINKS[`${s.discipline}:${s.type}`].url)
-                                }}
-                              >
-                                ▶ {WORKOUT_LINKS[`${s.discipline}:${s.type}`].label}
-                              </button>
-                            )}
-                          </>
-                        ) : (
-                          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                            {s.purpose}
-                          </div>
-                        )}
-                        {day.done.length > 0 && (
-                          <div style={{ fontSize: '11px', color: 'var(--accent-green)', marginTop: '10px' }}>
-                            ✓ Logged
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )
-          })()}
-
-          {/* ── Weekly Compliance Panel ──────────────────────────────────── */}
-          {compliance.rows.length > 0 && (
-            <div className="card" style={{ marginTop: '24px', padding: '20px' }}>
-
-              {/* Header row: score + key stats */}
+        <div className="card" style={{ padding: '20px' }}>
+          {compliance.rows.length === 0 ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No sessions planned for this week.</div>
+          ) : (
+            <>
+              {/* Score summary */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '20px', flexWrap: 'wrap' }}>
                 <div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '2px' }}>
@@ -540,141 +419,270 @@ export default function Calendar() {
                     </div>
                   )}
                 </div>
-
-                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                   {compliance.keyTotal > 0 && (
                     <div style={{
                       padding: '8px 14px', borderRadius: '8px',
                       background: compliance.keyDone === compliance.keyTotal ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
                       border: `1px solid ${compliance.keyDone === compliance.keyTotal ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
                     }}>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>KEY Sessions</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>KEY</div>
                       <div style={{ fontSize: '18px', fontWeight: 700, color: compliance.keyDone === compliance.keyTotal ? 'var(--accent-green)' : '#ef4444' }}>
                         {compliance.keyDone}/{compliance.keyTotal}
                       </div>
                     </div>
                   )}
                   {compliance.supTotal > 0 && (
-                    <div style={{
-                      padding: '8px 14px', borderRadius: '8px',
-                      background: 'rgba(148,163,184,0.06)', border: '1px solid var(--border)',
-                    }}>
+                    <div style={{ padding: '8px 14px', borderRadius: '8px', background: 'rgba(148,163,184,0.06)', border: '1px solid var(--border)' }}>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>Supporting</div>
-                      <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                        {compliance.supDone}/{compliance.supTotal}
-                      </div>
+                      <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>{compliance.supDone}/{compliance.supTotal}</div>
                     </div>
                   )}
                   {compliance.optTotal > 0 && (
-                    <div style={{
-                      padding: '8px 14px', borderRadius: '8px',
-                      background: 'rgba(148,163,184,0.06)', border: '1px solid var(--border)',
-                    }}>
+                    <div style={{ padding: '8px 14px', borderRadius: '8px', background: 'rgba(148,163,184,0.06)', border: '1px solid var(--border)' }}>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>Optional</div>
-                      <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-muted)' }}>
-                        {compliance.optDone}/{compliance.optTotal}
-                      </div>
+                      <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-muted)' }}>{compliance.optDone}/{compliance.optTotal}</div>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Session-by-session table */}
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Day</th>
-                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Planned</th>
-                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Logged</th>
-                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Gap</th>
-                      <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {compliance.rows.map((r, i) => {
-                      const isKeyMiss = r.planned?.importance === 'key' && (r.status === 'missed' || r.status === 'low')
-                      const isPending = r.status === 'pending'
-                      const rowBg = isKeyMiss ? 'rgba(239,68,68,0.06)'
-                        : isPending ? 'rgba(148,163,184,0.04)'
-                        : i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'
-                      const plannedMin = r.planned?.target_duration ?? null
-                      const loggedMin  = r.matched?.duration ?? null
-                      const gap = (!isPending && plannedMin !== null && loggedMin !== null)
-                        ? loggedMin - plannedMin : null
-                      const gapLabel = isPending ? '—'
-                        : gap === null ? (r.status === 'missed' || r.status === 'low') ? `-${plannedMin}m` : '—'
-                        : gap === 0 ? 'On target'
-                        : gap > 0 ? `+${gap}m`
-                        : `${gap}m`
-                      const gapColor = isPending ? 'var(--text-muted)'
-                        : gap === null ? (r.status === 'missed' ? '#ef4444' : r.status === 'low' ? '#fb923c' : 'var(--text-muted)')
-                        : gap >= 0 ? 'var(--accent-green)'
-                        : gap >= -plannedMin * 0.15 ? 'var(--accent-amber)'
-                        : '#ef4444'
+              {/* Session table with expandable rows */}
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px', width: '110px' }}>Day</th>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Session</th>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>Logged</th>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px', width: '80px' }}>Gap</th>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px', width: '90px' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {compliance.rows.map((r, i) => {
+                    const isKeyMiss = r.planned?.importance === 'key' && (r.status === 'missed' || r.status === 'low')
+                    const isPending = r.status === 'pending'
+                    const isOpen = expandedRow === i
+                    const desc = r.planned ? WORKOUT_DESCRIPTIONS[`${r.planned.discipline}:${r.planned.type}`] : null
+                    const hasDetail = !!desc
+                    const rowBg = isOpen ? 'rgba(59,130,246,0.06)'
+                      : isKeyMiss ? 'rgba(239,68,68,0.06)'
+                      : isPending ? 'rgba(148,163,184,0.04)'
+                      : i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'
+                    const plannedMin = r.planned?.target_duration ?? null
+                    const loggedMin  = r.matched?.duration ?? null
+                    const gap = (!isPending && plannedMin !== null && loggedMin !== null) ? loggedMin - plannedMin : null
+                    const gapLabel = isPending ? '—'
+                      : gap === null ? (r.status === 'missed' || r.status === 'low') ? `-${plannedMin}m` : '—'
+                      : gap === 0 ? 'On target' : gap > 0 ? `+${gap}m` : `${gap}m`
+                    const gapColor = isPending ? 'var(--text-muted)'
+                      : gap === null ? (r.status === 'missed' ? '#ef4444' : r.status === 'low' ? '#fb923c' : 'var(--text-muted)')
+                      : gap >= 0 ? 'var(--accent-green)'
+                      : gap >= -plannedMin * 0.15 ? 'var(--accent-amber)' : '#ef4444'
+                    const discColor = DISC_COLOR[r.planned?.discipline || r.matched?.discipline] || 'var(--text-muted)'
 
-                      return (
-                        <tr key={i} style={{ background: rowBg, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                          <td style={{ padding: '9px 10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', fontSize: '12px' }}>
+                    return (
+                      <React.Fragment key={i}>
+                        <tr
+                          style={{ background: rowBg, borderBottom: isOpen ? 'none' : '1px solid rgba(255,255,255,0.04)', cursor: hasDetail ? 'pointer' : 'default' }}
+                          onClick={() => hasDetail && setExpandedRow(isOpen ? null : i)}
+                        >
+                          <td style={{ padding: '10px 10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', fontSize: '12px' }}>
                             {formatShortDate(r.dateStr)}
                           </td>
-                          <td style={{ padding: '9px 10px' }}>
+                          <td style={{ padding: '10px 10px' }}>
                             {r.planned ? (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ color: DISC_COLOR[r.planned.discipline] || 'var(--text-muted)', fontWeight: 600 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                <span style={{ color: discColor, fontWeight: 600 }}>
                                   {DISC_LABEL[r.planned.discipline] || r.planned.discipline}
                                 </span>
                                 <span style={{ color: 'var(--text-muted)' }}>{r.planned.target_duration}m</span>
+                                {r.planned.target_intensity_zone && (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Z{r.planned.target_intensity_zone}</span>
+                                )}
                                 {r.planned.importance === 'key' && (
-                                  <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent-blue)', background: 'rgba(59,130,246,0.15)', padding: '1px 5px', borderRadius: '4px' }}>
-                                    KEY
-                                  </span>
+                                  <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent-blue)', background: 'rgba(59,130,246,0.15)', padding: '1px 5px', borderRadius: '4px' }}>KEY</span>
+                                )}
+                                {hasDetail && (
+                                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '2px' }}>{isOpen ? '▲' : '▼'}</span>
                                 )}
                               </div>
                             ) : (
                               <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
                             )}
                           </td>
-                          <td style={{ padding: '9px 10px' }}>
+                          <td style={{ padding: '10px 10px' }}>
                             {r.matched ? (
-                              <div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <span style={{ color: DISC_COLOR[r.matched.discipline] || 'var(--text-muted)', fontWeight: 600 }}>
-                                    {DISC_LABEL[r.matched.discipline] || r.matched.discipline}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                <span style={{ color: DISC_COLOR[r.matched.discipline] || 'var(--text-muted)', fontWeight: 600 }}>
+                                  {DISC_LABEL[r.matched.discipline] || r.matched.discipline}
+                                </span>
+                                <span style={{ color: 'var(--text-muted)' }}>{r.matched.duration}m</span>
+                                {r.matched.notes ? (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontStyle: 'italic' }}>
+                                    {r.matched.notes.length > 30 ? r.matched.notes.slice(0, 30) + '…' : r.matched.notes}
                                   </span>
-                                  <span style={{ color: 'var(--text-muted)' }}>{r.matched.duration}m</span>
-                                  {r.matched.notes ? (
-                                    <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontStyle: 'italic' }}>
-                                      {r.matched.notes.length > 24 ? r.matched.notes.slice(0, 24) + '…' : r.matched.notes}
-                                    </span>
-                                  ) : null}
-                                </div>
+                                ) : null}
                                 {r.planned && r.matched.dateStr !== r.planned.dateStr && (
-                                  <div style={{ fontSize: '10px', color: 'var(--accent-amber)', marginTop: '2px' }}>
-                                    done {formatShortDate(r.matched.dateStr)}
-                                  </div>
+                                  <span style={{ fontSize: '10px', color: 'var(--accent-amber)' }}>
+                                    ({formatShortDate(r.matched.dateStr)})
+                                  </span>
                                 )}
                               </div>
                             ) : (
                               <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
                             )}
                           </td>
-                          <td style={{ padding: '9px 10px', fontWeight: 600, color: gapColor, fontSize: '12px' }}>
-                            {gapLabel}
-                          </td>
-                          <td style={{ padding: '9px 10px' }}>
-                            <StatusBadge status={r.status} />
-                          </td>
+                          <td style={{ padding: '10px 10px', fontWeight: 600, color: gapColor, fontSize: '12px' }}>{gapLabel}</td>
+                          <td style={{ padding: '10px 10px' }}><StatusBadge status={r.status} /></td>
                         </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                        {isOpen && desc && (
+                          <tr style={{ background: 'rgba(59,130,246,0.04)', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                            <td />
+                            <td colSpan={4} style={{ padding: '0 10px 14px' }}>
+                              <div style={{
+                                borderLeft: `3px solid ${discColor}`,
+                                paddingLeft: '12px',
+                                marginTop: '4px',
+                              }}>
+                                <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                                  {desc.goal}
+                                </div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.65, marginBottom: '8px' }}>
+                                  {desc.execution}
+                                </div>
+                                {WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`] && (
+                                  <button
+                                    className="btn btn-secondary"
+                                    style={{ fontSize: '11px', padding: '4px 10px' }}
+                                    onClick={e => {
+                                      e.stopPropagation()
+                                      window.electronAPI?.openExternal(WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`].url)
+                                    }}
+                                  >
+                                    ▶ {WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`].label}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </>
           )}
-        </>
+        </div>
       )}
+    </div>
+  )
+}
+
+// ── Heatmap component ───────────────────────────────────────────────────────
+const CHECKPOINT_WEEKS = new Set([8, 16, 24, 28, 32, 36])
+
+function heatColor(w) {
+  if (w.isFuture)  return { bg: 'var(--bg-elevated)', text: 'var(--text-muted)' }
+  if (w.isCurrent) return { bg: 'rgba(59,130,246,0.25)', text: 'var(--accent-blue)' }
+  if (w.score === null) return { bg: 'var(--bg-elevated)', text: 'var(--text-muted)' }
+  if (w.score >= 90)  return { bg: 'rgba(34,197,94,0.25)',  text: 'var(--accent-green)' }
+  if (w.score >= 70)  return { bg: 'rgba(251,191,36,0.25)', text: 'var(--accent-amber)' }
+  return { bg: 'rgba(239,68,68,0.20)', text: 'var(--accent-red)' }
+}
+
+function fmtVol(min) {
+  if (!min) return '—'
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return h > 0 ? `${h}h${m > 0 ? m + 'm' : ''}` : `${m}m`
+}
+
+function TrainingHeatmap({ data, selectedWeek, onWeekClick }) {
+  const { weeks } = data
+  const COLS = 9
+  const rows = []
+  for (let i = 0; i < weeks.length; i += COLS) rows.push(weeks.slice(i, i + COLS))
+
+  return (
+    <div>
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: '16px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
+        {[
+          { bg: 'rgba(34,197,94,0.25)',  text: 'var(--accent-green)', label: '≥90%' },
+          { bg: 'rgba(251,191,36,0.25)', text: 'var(--accent-amber)', label: '70–89%' },
+          { bg: 'rgba(239,68,68,0.20)',  text: 'var(--accent-red)',   label: '<70%' },
+          { bg: 'rgba(59,130,246,0.25)', text: 'var(--accent-blue)',  label: 'Current week' },
+          { bg: 'var(--bg-elevated)',    text: 'var(--text-muted)',   label: 'Future' },
+        ].map(({ bg, text, label }) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: bg, border: `1px solid ${text}`, flexShrink: 0 }} />
+            {label}
+          </div>
+        ))}
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+          CP = checkpoint &nbsp;·&nbsp; click to navigate
+        </div>
+      </div>
+
+      {rows.map((row, ri) => (
+        <div key={ri} style={{ display: 'grid', gridTemplateColumns: `repeat(${COLS}, 1fr)`, gap: '5px', marginBottom: '5px' }}>
+          {row.map(w => {
+            const { bg, text } = heatColor(w)
+            const isCP = CHECKPOINT_WEEKS.has(w.weekNum)
+            const isSelected = w.weekNum === selectedWeek
+            return (
+              <div
+                key={w.weekNum}
+                onClick={() => onWeekClick(w.weekNum)}
+                style={{
+                  background: bg,
+                  border: isSelected
+                    ? '2px solid var(--accent-blue)'
+                    : isCP ? `1px solid ${text}` : '1px solid transparent',
+                  boxShadow: isSelected ? '0 0 0 1px var(--accent-blue)' : 'none',
+                  borderRadius: '6px',
+                  padding: '6px 4px',
+                  cursor: 'pointer',
+                  minHeight: '64px',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  gap: '2px',
+                  position: 'relative',
+                }}
+              >
+                {isCP && (
+                  <div style={{
+                    position: 'absolute', top: '3px', right: '5px',
+                    fontSize: '8px', color: text, fontWeight: 700, letterSpacing: '0.03em',
+                  }}>CP</div>
+                )}
+                <div style={{ fontSize: '11px', fontWeight: 700, color: text }}>
+                  W{w.weekNum}
+                </div>
+                <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                  {w.startStr.slice(5)}
+                </div>
+                {!w.isFuture && (
+                  <>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: text }}>
+                      {w.score !== null ? `${w.score}%` : '—'}
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      {fmtVol(w.volumeMin)}
+                    </div>
+                    {w.logged > 0 && (
+                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '1px' }}>
+                        {w.logged}/{w.planned || '?'} sessions
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ))}
     </div>
   )
 }
