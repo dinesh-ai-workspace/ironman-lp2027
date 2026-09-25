@@ -175,32 +175,110 @@ function computeWeekCompliance(days, todayISO) {
   const pastPlanned   = allPlanned.filter(p => p.dateStr <= todayISO)
   const futurePlanned = allPlanned.filter(p => p.dateStr >  todayISO)
 
+  // Only past/today logged sessions participate in matching — future-dated logs
+  // are not yet "earned" against planned slots
+  const pastLogged   = allLogged.filter(d => d.dateStr <= todayISO)
+  const futureLogged = allLogged.filter(d => d.dateStr >  todayISO)
+
   // ── Step 2: week-wide greedy matching ──────────────────────────────────────
-  // KEY sessions get first pick. Within same importance, sort by target_duration
-  // descending so longer sessions claim their best match before shorter ones.
-  const sorted = [...pastPlanned].sort((a, b) => {
-    const imp = { key: 0, supporting: 1, optional: 2 }
-    const di = (imp[a.importance] ?? 3) - (imp[b.importance] ?? 3)
+
+  // A log on day D with a same-discipline plan on D-1 defers to cross-day passes
+  const hasEarlierPlan = new Set()
+  for (const l of pastLogged) {
+    const prev = new Date(l.dateStr + 'T00:00:00Z')
+    prev.setUTCDate(prev.getUTCDate() - 1)
+    const prevStr = prev.toISOString().slice(0, 10)
+    if (pastPlanned.some(p => p.discipline === l.discipline && p.dateStr === prevStr)) {
+      hasEarlierPlan.add(l.id)
+    }
+  }
+
+  function daysDiff(a, b) {
+    return Math.abs((new Date(a + 'T00:00:00Z') - new Date(b + 'T00:00:00Z')) / 86400000)
+  }
+
+  // Pick best log: duration closeness → (cross-day: date distance) → earlier log date → smaller id
+  function pickBest(plan, candidates, crossDay = false) {
+    return candidates.reduce((best, d) => {
+      const dd = Math.abs(d.duration - plan.target_duration)
+      const bd = Math.abs(best.duration - plan.target_duration)
+      if (dd !== bd) return dd < bd ? d : best
+      if (crossDay) {
+        const dDist = daysDiff(d.dateStr, plan.dateStr)
+        const bDist = daysDiff(best.dateStr, plan.dateStr)
+        if (dDist !== bDist) return dDist < bDist ? d : best
+      }
+      if (d.dateStr !== best.dateStr) return d.dateStr < best.dateStr ? d : best
+      return String(d.id) <= String(best.id) ? d : best
+    })
+  }
+
+  const impOrder = { key: 0, supporting: 1, optional: 2 }
+  const usedLoggedIds = new Set()
+  const matchMap = new Map() // plan object ref → matched log
+
+  // ── Pass 1: same-day, importance-first (KEY gets first pick of same-day logs) ──
+  const sortedByImp = [...pastPlanned].sort((a, b) => {
+    const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
     if (di !== 0) return di
+    if (a.dateStr !== b.dateStr) return a.dateStr.localeCompare(b.dateStr)
     return b.target_duration - a.target_duration
   })
 
-  const usedLoggedIds = new Set()
-  const matchedRows = []
-
-  for (const p of sorted) {
-    // Find the week's logged sessions with the same discipline not yet claimed
-    const candidates = allLogged.filter(
-      d => d.discipline === p.discipline && !usedLoggedIds.has(d.id)
+  for (const p of sortedByImp) {
+    const candidates = pastLogged.filter(d =>
+      d.discipline === p.discipline && !usedLoggedIds.has(d.id)
+        && d.dateStr === p.dateStr && !hasEarlierPlan.has(d.id)
     )
-    let matched = null
     if (candidates.length > 0) {
-      matched = candidates.reduce((best, d) =>
-        Math.abs(d.duration - p.target_duration) < Math.abs(best.duration - p.target_duration) ? d : best
-      )
-      usedLoggedIds.add(matched.id)
+      const best = pickBest(p, candidates)
+      usedLoggedIds.add(best.id)
+      matchMap.set(p, best)
     }
+  }
 
+  // ── Pass 2: cross-day, KEY only, ±2 days (KEY always gets cross-day priority) ──
+  const keyPlans = pastPlanned
+    .filter(p => p.importance === 'key' && !matchMap.has(p))
+    .sort((a, b) => a.dateStr.localeCompare(b.dateStr))
+
+  for (const p of keyPlans) {
+    const candidates = pastLogged.filter(d =>
+      d.discipline === p.discipline && !usedLoggedIds.has(d.id)
+        && daysDiff(d.dateStr, p.dateStr) <= 2
+    )
+    if (candidates.length > 0) {
+      const best = pickBest(p, candidates, true)
+      usedLoggedIds.add(best.id)
+      matchMap.set(p, best)
+    }
+  }
+
+  // ── Pass 3: cross-day, supporting + optional, date-first, ±2 days ─────────────
+  const nonKeyPlans = pastPlanned
+    .filter(p => p.importance !== 'key' && !matchMap.has(p))
+    .sort((a, b) => {
+      if (a.dateStr !== b.dateStr) return a.dateStr.localeCompare(b.dateStr)
+      const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
+      if (di !== 0) return di
+      return b.target_duration - a.target_duration
+    })
+
+  for (const p of nonKeyPlans) {
+    const candidates = pastLogged.filter(d =>
+      d.discipline === p.discipline && !usedLoggedIds.has(d.id)
+        && daysDiff(d.dateStr, p.dateStr) <= 2
+    )
+    if (candidates.length > 0) {
+      const best = pickBest(p, candidates, true)
+      usedLoggedIds.add(best.id)
+      matchMap.set(p, best)
+    }
+  }
+
+  const matchedRows = []
+  for (const p of pastPlanned) {
+    const matched = matchMap.get(p) ?? null
     let status = 'missed', pct = 0
     if (matched) {
       pct    = matched.duration / p.target_duration
@@ -215,10 +293,14 @@ function computeWeekCompliance(days, todayISO) {
   }
 
   // ── Step 4: unclaimed logged sessions → extras ─────────────────────────────
-  for (const d of allLogged) {
+  for (const d of pastLogged) {
     if (!usedLoggedIds.has(d.id)) {
       matchedRows.push({ dateStr: d.dateStr, date: d.date, planned: null, matched: d, status: 'extra', pct: null })
     }
+  }
+  // Future-dated logged sessions shown as extras but never matched
+  for (const d of futureLogged) {
+    matchedRows.push({ dateStr: d.dateStr, date: d.date, planned: null, matched: d, status: 'extra', pct: null })
   }
 
   // Sort by planned date (or logged date for extras), then by discipline
@@ -389,9 +471,32 @@ export default function Calendar() {
         <div style={{ color: 'var(--text-muted)' }}>Loading...</div>
       ) : (
         <div className="card" style={{ padding: '20px' }}>
-          {compliance.rows.length === 0 ? (
-            <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No sessions planned for this week.</div>
-          ) : (
+          {(() => {
+            // IDs already claimed by a cross-day match — don't show these again as logged_only
+            const claimedIds = new Set(
+              compliance.rows.filter(r => r.matched != null).map(r => r.matched.id)
+            )
+            // Build per-day display items — rest days always included
+            const displayItems = []
+            for (const day of days) {
+              const dayRows = compliance.rows.filter(r => r.dateStr === day.dateStr)
+              if (dayRows.length > 0) {
+                for (const r of dayRows) {
+                  displayItems.push({ type: 'session', row: r, dateStr: day.dateStr, isToday: day.isToday })
+                }
+              } else {
+                // Show unclaimed logged sessions (truly unmatched extras on a rest/unplanned day)
+                const unclaimed = day.done.filter(d => !claimedIds.has(d.id))
+                if (unclaimed.length > 0) {
+                  for (const d of unclaimed) {
+                    displayItems.push({ type: 'logged_only', logged: d, dateStr: day.dateStr, isToday: day.isToday })
+                  }
+                } else {
+                  displayItems.push({ type: 'rest', dateStr: day.dateStr, isToday: day.isToday })
+                }
+              }
+            }
+            return (
             <>
               {/* Score summary */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '20px', flexWrap: 'wrap' }}>
@@ -459,7 +564,41 @@ export default function Calendar() {
                   </tr>
                 </thead>
                 <tbody>
-                  {compliance.rows.map((r, i) => {
+                  {displayItems.map((item, i) => {
+                    if (item.type === 'rest') {
+                      return (
+                        <tr key={item.dateStr} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <td style={{ padding: '10px 10px', color: item.isToday ? 'var(--accent-blue)' : 'var(--text-muted)', whiteSpace: 'nowrap', fontSize: '12px', fontWeight: item.isToday ? 600 : 400 }}>
+                            {formatShortDate(item.dateStr)}
+                          </td>
+                          <td colSpan={4} style={{ padding: '10px 10px', color: 'var(--text-muted)', fontSize: '12px', fontStyle: 'italic', opacity: 0.5 }}>
+                            Rest
+                          </td>
+                        </tr>
+                      )
+                    }
+                    if (item.type === 'logged_only') {
+                      const d = item.logged
+                      return (
+                        <tr key={`lo-${d.id}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <td style={{ padding: '10px 10px', color: item.isToday ? 'var(--accent-blue)' : 'var(--text-muted)', whiteSpace: 'nowrap', fontSize: '12px', fontWeight: item.isToday ? 600 : 400 }}>
+                            {formatShortDate(item.dateStr)}
+                          </td>
+                          <td style={{ padding: '10px 10px', color: 'var(--text-muted)', fontSize: '12px', fontStyle: 'italic', opacity: 0.5 }}>Rest</td>
+                          <td style={{ padding: '10px 10px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ color: DISC_COLOR[d.discipline] || 'var(--text-muted)', fontWeight: 600 }}>
+                                {DISC_LABEL[d.discipline] || d.discipline}
+                              </span>
+                              <span style={{ color: 'var(--text-muted)' }}>{d.duration}m</span>
+                            </div>
+                          </td>
+                          <td style={{ padding: '10px 10px', color: 'var(--text-muted)', fontSize: '12px' }}>—</td>
+                          <td style={{ padding: '10px 10px' }}><StatusBadge status="extra" /></td>
+                        </tr>
+                      )
+                    }
+                    const r = item.row
                     const isKeyMiss = r.planned?.importance === 'key' && (r.status === 'missed' || r.status === 'low')
                     const isPending = r.status === 'pending'
                     const isOpen = expandedRow === i
@@ -468,7 +607,7 @@ export default function Calendar() {
                     const rowBg = isOpen ? 'rgba(59,130,246,0.06)'
                       : isKeyMiss ? 'rgba(239,68,68,0.06)'
                       : isPending ? 'rgba(148,163,184,0.04)'
-                      : i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'
+                      : 'transparent'
                     const plannedMin = r.planned?.target_duration ?? null
                     const loggedMin  = r.matched?.duration ?? null
                     const gap = (!isPending && plannedMin !== null && loggedMin !== null) ? loggedMin - plannedMin : null
@@ -573,7 +712,8 @@ export default function Calendar() {
                 </tbody>
               </table>
             </>
-          )}
+            )
+          })()}
         </div>
       )}
     </div>

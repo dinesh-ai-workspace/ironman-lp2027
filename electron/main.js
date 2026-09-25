@@ -1142,31 +1142,111 @@ ipcMain.handle('stats:heatmap', () => {
   }
 
   function computeScore(plannedRows, loggedRows, cutoffDate) {
-    // Only score past/today planned sessions
     const past = plannedRows.filter(p => p.date <= cutoffDate)
     if (past.length === 0) return null
 
-    // Sort: key first, then by target_duration desc (same greedy order as frontend)
     const impOrder = { key: 0, supporting: 1, optional: 2 }
-    const sorted = [...past].sort((a, b) => {
-      const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
-      return di !== 0 ? di : b.target_duration - a.target_duration
-    })
+
+    // A log on day D with a same-discipline plan on D-1 defers to cross-day passes
+    const hasEarlierPlan = new Set()
+    for (const l of loggedRows) {
+      const prev = new Date(l.date + 'T00:00:00Z')
+      prev.setUTCDate(prev.getUTCDate() - 1)
+      const prevStr = prev.toISOString().slice(0, 10)
+      if (past.some(p => p.discipline === l.discipline && p.date === prevStr)) {
+        hasEarlierPlan.add(l.id)
+      }
+    }
+
+    function daysDiff(a, b) {
+      return Math.abs((new Date(a + 'T00:00:00Z') - new Date(b + 'T00:00:00Z')) / 86400000)
+    }
+
+    function pickBest(plan, candidates, crossDay = false) {
+      return candidates.reduce((best, l) => {
+        const dd = Math.abs(l.duration - plan.target_duration)
+        const bd = Math.abs(best.duration - plan.target_duration)
+        if (dd !== bd) return dd < bd ? l : best
+        if (crossDay) {
+          const dDist = daysDiff(l.date, plan.date)
+          const bDist = daysDiff(best.date, plan.date)
+          if (dDist !== bDist) return dDist < bDist ? l : best
+        }
+        if (l.date !== best.date) return l.date < best.date ? l : best
+        return l.id <= best.id ? l : best
+      })
+    }
 
     const usedIds = new Set()
-    let earned = 0, maxPts = 0
+    const matchMap = new Map()
 
-    for (const p of sorted) {
+    // Pass 1: same-day, importance-first
+    const sortedByImp = [...past].sort((a, b) => {
+      const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
+      if (di !== 0) return di
+      if (a.date !== b.date) return a.date.localeCompare(b.date)
+      return b.target_duration - a.target_duration
+    })
+
+    for (const p of sortedByImp) {
+      const candidates = loggedRows.filter(l =>
+        l.discipline === p.discipline && !usedIds.has(l.id)
+          && l.date === p.date && !hasEarlierPlan.has(l.id)
+      )
+      if (candidates.length > 0) {
+        const best = pickBest(p, candidates)
+        usedIds.add(best.id)
+        matchMap.set(p, best)
+      }
+    }
+
+    // Pass 2: cross-day, KEY only, ±2 days
+    const keyPlans = past
+      .filter(p => p.importance === 'key' && !matchMap.has(p))
+      .sort((a, b) => a.date.localeCompare(b.date))
+
+    for (const p of keyPlans) {
+      const candidates = loggedRows.filter(l =>
+        l.discipline === p.discipline && !usedIds.has(l.id)
+          && daysDiff(l.date, p.date) <= 2
+      )
+      if (candidates.length > 0) {
+        const best = pickBest(p, candidates, true)
+        usedIds.add(best.id)
+        matchMap.set(p, best)
+      }
+    }
+
+    // Pass 3: cross-day, supporting + optional, date-first, ±2 days
+    const nonKeyPlans = past
+      .filter(p => p.importance !== 'key' && !matchMap.has(p))
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date)
+        const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
+        if (di !== 0) return di
+        return b.target_duration - a.target_duration
+      })
+
+    for (const p of nonKeyPlans) {
+      const candidates = loggedRows.filter(l =>
+        l.discipline === p.discipline && !usedIds.has(l.id)
+          && daysDiff(l.date, p.date) <= 2
+      )
+      if (candidates.length > 0) {
+        const best = pickBest(p, candidates, true)
+        usedIds.add(best.id)
+        matchMap.set(p, best)
+      }
+    }
+
+    let earned = 0, maxPts = 0
+    for (const p of past) {
       const w = IMP_W[p.importance] || 1
       maxPts += w
-      const candidates = loggedRows.filter(l => l.discipline === p.discipline && !usedIds.has(l.id))
-      if (candidates.length === 0) continue
-      const best = candidates.reduce((b, l) =>
-        Math.abs(l.duration - p.target_duration) < Math.abs(b.duration - p.target_duration) ? l : b
-      )
-      usedIds.add(best.id)
-      const pct = best.duration / p.target_duration
-      earned += w * sessionCredit(pct)
+      const matched = matchMap.get(p)
+      if (matched) {
+        earned += w * sessionCredit(matched.duration / p.target_duration)
+      }
     }
 
     return maxPts > 0 ? Math.round(earned / maxPts * 100) : null
@@ -1186,7 +1266,7 @@ ipcMain.handle('stats:heatmap', () => {
     ).all(planId, startStr, endStr)
 
     const loggedRows = db.prepare(
-      'SELECT id, discipline, duration FROM logged_sessions WHERE date>=? AND date<=?'
+      'SELECT id, discipline, duration, date FROM logged_sessions WHERE date>=? AND date<=?'
     ).all(startStr, endStr)
 
     const volumeMin = loggedRows.reduce((s, r) => s + (r.duration || 0), 0)
