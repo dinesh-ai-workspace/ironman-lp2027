@@ -81,7 +81,7 @@ function applyGradeCap(grade, cap) {
 // A4: types that only match on their planned date (no cross-day)
 const SAME_DAY_ONLY_TYPES = new Set(['brick_run', 'race_simulation', 'race'])
 // A8: test sessions get flat credit (100% if ratio ≥ 0.50)
-const TEST_TYPES = new Set(['ftp_test', 'time_trial'])
+const TEST_TYPES = new Set(['ftp_test', 'time_trial', 'continuous_test'])
 
 /**
  * 3-pass greedy matching + score computation (Scoring v2 with A1–A11).

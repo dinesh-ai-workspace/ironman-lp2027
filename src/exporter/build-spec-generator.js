@@ -25,12 +25,14 @@ function generateBuildSpec() {
 | Day | Session(s) |
 |---|---|
 | Mon | REST |
-| Tue | Swim (supporting) |
+| Tue | Swim (supporting) [+ Easy run 25 min Z2 (supporting) in Wks 6–14; 20 min in cutback Wks 8, 12] |
 | Wed | Bike (supporting) + Strength (optional) |
 | Thu | Long run (KEY) + Swim × 1 (supporting; **Wks 1–4 no Thursday swim**) |
 | Fri | Swim (KEY — longest of week) + Strength (optional) |
 | Sat | Long bike (KEY) |
-| Sun | Easy recovery run (optional) |
+| Sun | Easy recovery run (optional Wks 1–5, supporting Wks 6–14) |
+
+**Gate tests (KEY, scheduled on Thu/Tue as shown):** Wk 8 Thu swim 40 min time_trial (400m TT); Wk 12 Thu swim 50 min continuous_test (1,000m); Wk 16 Wed bike 60 min ftp_test; Wk 20 Thu swim 70 min continuous_test (1,500m); Wk 24 Thu run 60 min time_trial (30-min TT); Wk 26 Tue swim 80 min continuous_test (2,000m); Wk 34 Tue swim 100 min continuous_test (3,000m); Wk 35 Tue swim 110 min (3,800m attempt).
 
 **Weekly layout — Wks 15–28 (Mon = day 0):**
 
@@ -42,7 +44,7 @@ function generateBuildSpec() {
 | Thu | Long run (KEY) + Swim (supporting) |
 | Fri | Swim (KEY — longest of week) + Strength 35 min (optional) |
 | Sat | Long bike (KEY) [+ Brick run 20–30 min KEY on Wks 21, 23, 25, 27] |
-| Sun | Easy recovery run (optional) |
+| Sun | Easy recovery run (supporting) |
 
 **A/B alternating weekends — Wks 29–38:**
 
@@ -60,7 +62,7 @@ Tue/Wed/Thu swim + Fri OW swim maintained in all A/B weeks. Fri swim = open-wate
 - Wks 14–45: every 4th week × 0.63 (60–65% load rule)
 
 **Special weeks:**
-- **Week 5** (2026-10-12): Test week. Wed = FTP bike test 60 min (KEY). Thu = swim TT 40 min (supporting) + run TT 60 min (KEY). Sat = Z2 ride (unchanged).
+- **Week 5** (2026-10-12): Test week. Wed = FTP bike test 60 min (KEY). Thu = swim TT 40 min (KEY — K1 exception) + run TT 60 min (KEY). Sat = Z2 ride (unchanged).
 - **Week 18** (Sun 2027-01-17): Sprint/Olympic tune-up race. Short swim Monday, shake-out run Friday.
 - **Week 28** (Sat 2027-03-27): Half-Ironman tune-up race (Saturday). Short swim Tuesday, easy run Wednesday, race Saturday. Race target: 450 min.
 - **Week 38** (Sat 2027-06-05): Dress Rehearsal. Swim 100 min → T1 → Bike 300 min → T2 → Run 90 min back-to-back. Full race nutrition and gear.
@@ -123,7 +125,7 @@ Defined in \`src/core/plan-generator/index.js → buildReadinessGates()\`. Inser
 
 **A7. Modifiers multiply:** overshoot (×0.8 replaces the 100% tier) and too hard (×0.6) combine — e.g. overshoot and too hard = 0.8 × 0.6 = 48%.
 
-**A8. Test sessions** (type ftp_test, time_trial): credit 100% if a matching log exists with ratio ≥ 0.50; otherwise 0%. No overshoot or intensity modifiers apply.
+**A8. Test sessions** (type ftp_test, time_trial, continuous_test): credit 100% if a matching log exists with ratio ≥ 0.50; otherwise 0%. No overshoot or intensity modifiers apply.
 
 **A9. Race sessions** (discipline race): credit 100% if a multisport/triathlon activity, or any swim/bike/run logs, exist on the race date. No duration tiers, no overshoot.
 
@@ -238,6 +240,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-05 | **CN-5 #3** — Data freshness block (5 sources, stale flag >2 d, import-pending warning); fueling day-type uses weighted training minutes (swim/bike/run 100%, strength/other 50%), daily table shows "weighted (raw)"; logged threshold raised 800→1,200 kcal; build spec H B1/C1 updated |
 | 2026-10-05 | **CN-5 #4** — Weight trend uses calendar-day 7-day windows (≥3 readings required); trend = (prior 7-day avg − recent 7-day avg) ÷ 2 lb/wk; labels: below target / on target / above target / losing too fast / gaining (Foundation target 0.5–0.75 lb/wk); "Weigh-ins last 7 days: N (target ≥4)" added under Body Composition table; build spec H C3/W1–W5 updated |
 | 2026-10-05 | **CN-5 #5** — KEY swim per week (rule K1): longest non-optional swim = KEY; tie → later day; Wk 5 exception (Thu TT); race/DR weeks unchanged; all 41 eligible weeks (1–44 excl. 18, 28, 38) updated in Plan ID 10 in place. K2: both caps display as "swim<75%; KEY missed"; lower cap C wins. Build spec A layout + D K1–K2 updated |
+| 2026-10-05 | **CN-5 #6** — Gate tests scheduled: Wk 8 swim time_trial 40 min; Wk 12/20/26 swim continuous_test 50/70/80 min; Wk 16 bike ftp_test 60 min; Wk 24 run time_trial 60 min; Wk 34 purpose update; Wk 35 swim 100→110 min. Run frequency: Tue easy run added Wks 6–14 (25 min, 20 min cutback). Sunday recovery run → supporting Wks 6–28. Wk 38 DR and Wk 45 race zone → Z2. A8 adds continuous_test. Build spec A layout/notes + A8 + changelog updated |
 
 ---
 
