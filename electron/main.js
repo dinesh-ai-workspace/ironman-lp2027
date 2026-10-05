@@ -137,6 +137,15 @@ function runMigrations() {
     )
   `).run()
 
+  // CN-5 #9: swap columns on logged_sessions
+  const lsCols = db.prepare('PRAGMA table_info(logged_sessions)').all().map(c => c.name)
+  if (!lsCols.includes('swap_planned_id')) {
+    db.prepare('ALTER TABLE logged_sessions ADD COLUMN swap_planned_id INTEGER').run()
+  }
+  if (!lsCols.includes('swap_planned_discipline')) {
+    db.prepare('ALTER TABLE logged_sessions ADD COLUMN swap_planned_discipline TEXT').run()
+  }
+
   db.prepare(`
     CREATE TABLE IF NOT EXISTS body_composition (
       id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -322,6 +331,28 @@ ipcMain.handle('sessions:planned:list', (event, filters = {}) => {
   return db.prepare(sql).all(...params)
 })
 
+// ─── IPC: sessions:planned:week ──────────────────────────────────────────────
+// Returns all non-optional planned sessions in the Mon–Sun week containing date.
+// Used by Logger.jsx to populate the swap replacement picker.
+ipcMain.handle('sessions:planned:week', (event, date) => {
+  function _ws(ds) {
+    const d = new Date(ds + 'T00:00:00Z')
+    d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7)
+    return d.toISOString().slice(0, 10)
+  }
+  function _da(ds, n) {
+    const d = new Date(ds + 'T00:00:00Z')
+    d.setUTCDate(d.getUTCDate() + n)
+    return d.toISOString().slice(0, 10)
+  }
+  const activePlan = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
+  const wStart = _ws(date)
+  const wEnd = _da(wStart, 6)
+  return db.prepare(
+    "SELECT id, discipline, type, target_duration, importance, date FROM planned_sessions WHERE plan_id=? AND date>=? AND date<=? AND importance != 'optional' ORDER BY date, discipline"
+  ).all(activePlan ? activePlan.id : -1, wStart, wEnd)
+})
+
 // ─── IPC: sessions:log ────────────────────────────────────────────────────
 ipcMain.handle('sessions:log', (event, session) => {
   let plannedSessionId = session.planned_session_id || null
@@ -345,11 +376,13 @@ ipcMain.handle('sessions:log', (event, session) => {
     INSERT INTO logged_sessions
       (planned_session_id, discipline, date, start_datetime, end_datetime, duration, distance,
        avg_hr, rpe, notes, is_brick, avg_power, normalized_power, avg_cadence,
-       environment, wetsuit_used, pool_length_m, source, import_batch_id, reason)
+       environment, wetsuit_used, pool_length_m, source, import_batch_id, reason,
+       swap_planned_id, swap_planned_discipline)
     VALUES
       (@planned_session_id, @discipline, @date, @start_datetime, @end_datetime, @duration, @distance,
        @avg_hr, @rpe, @notes, @is_brick, @avg_power, @normalized_power, @avg_cadence,
-       @environment, @wetsuit_used, @pool_length_m, @source, @import_batch_id, @reason)
+       @environment, @wetsuit_used, @pool_length_m, @source, @import_batch_id, @reason,
+       @swap_planned_id, @swap_planned_discipline)
   `)
 
   const result = stmt.run({
@@ -373,6 +406,8 @@ ipcMain.handle('sessions:log', (event, session) => {
     source: session.source || 'manual',
     import_batch_id: session.import_batch_id || null,
     reason: session.reason || null,
+    swap_planned_id: session.swap_planned_id ? parseInt(session.swap_planned_id) : null,
+    swap_planned_discipline: session.swap_planned_discipline || null,
   })
 
   // Background sync after session log
@@ -408,7 +443,8 @@ ipcMain.handle('sessions:logged:update', (event, id, data) => {
   const fields = []
   const params = []
   const allowed = ['duration', 'distance', 'avg_hr', 'rpe', 'notes', 'avg_power',
-    'normalized_power', 'avg_cadence', 'environment', 'wetsuit_used', 'pool_length_m', 'reason']
+    'normalized_power', 'avg_cadence', 'environment', 'wetsuit_used', 'pool_length_m', 'reason',
+    'swap_planned_id', 'swap_planned_discipline']
   for (const key of allowed) {
     if (data[key] !== undefined) {
       fields.push(`${key} = ?`)

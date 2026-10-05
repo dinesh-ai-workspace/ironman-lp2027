@@ -277,11 +277,26 @@ function generateSnapshot(db) {
   `).all(planId, since14, today)
 
   const logged14 = db.prepare(`
-    SELECT *, reason FROM logged_sessions WHERE date>=? AND date<=? ORDER BY date, discipline
+    SELECT *, reason, swap_planned_id, swap_planned_discipline FROM logged_sessions WHERE date>=? AND date<=? ORDER BY date, discipline
   `).all(since14, today)
 
   // ── 3-pass matching (mirrors computeScore logic) ──────────────────────────
   const impOrder = { key: 0, supporting: 1, optional: 2 }
+
+  const usedIds14 = new Set()
+  const matchMap14 = new Map()
+
+  // Swap pre-pass: match swap logs to their specified planned sessions
+  const swapMap14 = new Map() // plan.id → { plan, log }
+  for (const l of logged14) {
+    if (l.reason === 'swapped' && l.swap_planned_id != null) {
+      const plan = planned14.find(p => p.id === l.swap_planned_id)
+      if (plan && !swapMap14.has(plan.id)) {
+        swapMap14.set(plan.id, { plan, log: l })
+        usedIds14.add(l.id)
+      }
+    }
+  }
 
   const hasEarlierPlan14 = new Set()
   for (const l of logged14) {
@@ -312,11 +327,8 @@ function generateSnapshot(db) {
     })
   }
 
-  const usedIds14 = new Set()
-  const matchMap14 = new Map()
-
-  // Pass 1: same-day
-  const sortedByImp14 = [...planned14].sort((a, b) => {
+  // Pass 1: same-day (skip swap-matched plans)
+  const sortedByImp14 = [...planned14].filter(p => !swapMap14.has(p.id)).sort((a, b) => {
     const di = (impOrder[a.importance]??3) - (impOrder[b.importance]??3)
     if (di !== 0) return di
     if (a.date !== b.date) return a.date.localeCompare(b.date)
@@ -326,14 +338,14 @@ function generateSnapshot(db) {
     const cands = logged14.filter(l => l.discipline === p.discipline && !usedIds14.has(l.id) && l.date === p.date && !hasEarlierPlan14.has(l.id))
     if (cands.length > 0) { const best = pickBest14(p, cands); usedIds14.add(best.id); matchMap14.set(p.id, { plan: p, log: best }) }
   }
-  // Pass 2: cross-day, KEY, ±2
-  const keyP14 = planned14.filter(p => p.importance === 'key' && !matchMap14.has(p.id)).sort((a,b)=>a.date.localeCompare(b.date))
+  // Pass 2: cross-day, KEY, ±2 (skip swap-matched plans)
+  const keyP14 = planned14.filter(p => p.importance === 'key' && !matchMap14.has(p.id) && !swapMap14.has(p.id)).sort((a,b)=>a.date.localeCompare(b.date))
   for (const p of keyP14) {
     const cands = logged14.filter(l => l.discipline === p.discipline && !usedIds14.has(l.id) && days14(l.date, p.date) <= 2)
     if (cands.length > 0) { const best = pickBest14(p, cands, true); usedIds14.add(best.id); matchMap14.set(p.id, { plan: p, log: best }) }
   }
-  // Pass 3: cross-day, non-KEY, ±2
-  const nonKeyP14 = planned14.filter(p => p.importance !== 'key' && !matchMap14.has(p.id)).sort((a,b)=>{ if(a.date!==b.date) return a.date.localeCompare(b.date); return (impOrder[a.importance]??3)-(impOrder[b.importance]??3) })
+  // Pass 3: cross-day, non-KEY, ±2 (skip swap-matched plans)
+  const nonKeyP14 = planned14.filter(p => p.importance !== 'key' && !matchMap14.has(p.id) && !swapMap14.has(p.id)).sort((a,b)=>{ if(a.date!==b.date) return a.date.localeCompare(b.date); return (impOrder[a.importance]??3)-(impOrder[b.importance]??3) })
   for (const p of nonKeyP14) {
     const cands = logged14.filter(l => l.discipline === p.discipline && !usedIds14.has(l.id) && days14(l.date, p.date) <= 2)
     if (cands.length > 0) { const best = pickBest14(p, cands, true); usedIds14.add(best.id); matchMap14.set(p.id, { plan: p, log: best }) }
@@ -345,6 +357,29 @@ function generateSnapshot(db) {
 
   // Matched and unmatched planned sessions
   for (const p of planned14) {
+    // C1/C2: swapped — two rows (covered by swap + logged swapped row)
+    const swapEntry = swapMap14.get(p.id)
+    if (swapEntry) {
+      const { log: sl } = swapEntry
+      sessionLines.push({
+        date: p.date, disc: p.discipline, tier: p.importance,
+        planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—',
+        avgHr: '—', powerPace: '—', rpe: '—',
+        status: 'covered by swap', reason: '—', note: '—', _order: 0,
+      })
+      sessionLines.push({
+        date: p.date, disc: sl.discipline, tier: p.importance,
+        planMin: p.target_duration, actualMin: fmtInt(sl.duration),
+        dist: sl.distance != null ? fmt2(sl.distance) : '—',
+        pace: calcPace(sl.discipline, sl.duration, sl.distance),
+        avgHr: dash(sl.avg_hr), powerPace: dash(sl.avg_power),
+        rpe: dash(sl.rpe),
+        status: `swapped (${p.discipline} → ${sl.discipline})`,
+        reason: 'swapped', note: (sl.notes||'').slice(0, 40) || '—', _order: 1,
+      })
+      continue
+    }
+
     const m = matchMap14.get(p.id)
     if (m) {
       const { log } = m
@@ -363,17 +398,16 @@ function generateSnapshot(db) {
         avgHr: dash(log.avg_hr), powerPace: dash(log.avg_power),
         rpe: dash(log.rpe), status,
         reason: (log.reason && log.reason !== 'completed') ? log.reason : '—',
-        note: (log.notes||'').slice(0, 40) || '—',
+        note: (log.notes||'').slice(0, 40) || '—', _order: 0,
       })
     } else if (p.date < today) {
-      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '✗ missed', reason: '—', note: '—' })
+      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '✗ missed', reason: '—', note: '—', _order: 0 })
     } else if (p.date === today) {
-      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '⏳ pending', reason: '—', note: '—' })
+      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '⏳ pending', reason: '—', note: '—', _order: 0 })
     }
-    // future dates: skip
   }
 
-  // Unmatched logged sessions → Extra sessions (D4)
+  // Unmatched logged sessions → Extra sessions (D4); swapped logs already in usedIds14
   const currWkStart = weekStartFor(wkNum)
   let unplannedMinCurrWk = 0
   for (const l of logged14) {
@@ -385,8 +419,20 @@ function generateSnapshot(db) {
     }
   }
 
-  sessionLines.sort((a, b) => b.date.localeCompare(a.date))
+  sessionLines.sort((a, b) => {
+    if (a.date !== b.date) return b.date.localeCompare(a.date)
+    return (a._order || 0) - (b._order || 0)
+  })
   extraLines.sort((a, b) => b.date.localeCompare(a.date))
+
+  // B1: swim swap note for current week
+  const currWkSwimSwaps = logged14.filter(l =>
+    l.date >= currWkStart && l.date <= today &&
+    l.reason === 'swapped' && l.swap_planned_discipline === 'swim' && l.discipline !== 'swim'
+  )
+  const swimSwapNoteCurrWk = currWkSwimSwaps.length > 0
+    ? `Note: ${currWkSwimSwaps.length} swim session(s) swapped to other discipline this week.`
+    : null
 
   const sessionHeader = '| Date | Disc | Tier | Plan min | Actual min | Dist mi | Pace | Avg HR bpm | Power W | RPE | Status | Reason | Note |\n' +
                         '|---|---|---|---|---|---|---|---|---|---|---|---|---|'
@@ -603,12 +649,25 @@ function generateSnapshot(db) {
   ).join('\n')
 
   // ─── Section 8: Athlete Notes ─────────────────────────────────────────────
+  // Strip raw Garmin metric segments (pipe- or newline-delimited; already in Wellness columns)
+  function cleanNote(raw) {
+    if (!raw) return null
+    const parts = raw.split(/\s*[\n|]\s*/)
+    const kept = parts.filter(p => !/^\s*(Sleep Score|RHR|HRV|Body Battery|Quality)\s*:/i.test(p))
+    return kept.join(' | ').trim() || null
+  }
+
   const recentNotes = db.prepare(
     "SELECT date, notes FROM daily_wellness WHERE notes IS NOT NULL AND notes != '' ORDER BY date DESC LIMIT 3"
   ).all()
-  const athleteNotes = recentNotes.length > 0
-    ? recentNotes.map(n => `**${n.date}**: ${n.notes}`).join('\n\n')
-    : '— No recent notes'
+  const athleteNotes = (() => {
+    const filtered = recentNotes
+      .map(n => ({ date: n.date, text: cleanNote(n.notes) }))
+      .filter(n => n.text)
+    return filtered.length > 0
+      ? filtered.map(n => `**${n.date}**: ${n.text}`).join('\n\n')
+      : '— No recent notes'
+  })()
 
   // ─── Fueling section ─────────────────────────────────────────────────────
   // Weekly fueling table: last 4 completed weeks + current week
@@ -735,6 +794,14 @@ function generateSnapshot(db) {
     ? `⚠ Pain alert: ${painCount} pain-flagged sessions in 14 days — coach review required.`
     : null
 
+  // B2: swim swap pattern alert — ≥2 swim sessions replaced in 14-day window
+  const swimSwapCount14 = db.prepare(
+    "SELECT COUNT(*) as cnt FROM logged_sessions WHERE date>=? AND date<=? AND reason='swapped' AND swap_planned_discipline='swim' AND discipline != 'swim'"
+  ).get(since14, today)?.cnt || 0
+  const swimSwapAlert = swimSwapCount14 >= 2
+    ? `⚠ Swim swap pattern: ${swimSwapCount14} swim sessions replaced in 14 days — coach review.`
+    : null
+
   // C5: stop-loss hint
   let stopLossHint = null
   if (completedWeeks.length >= 2) {
@@ -752,6 +819,7 @@ function generateSnapshot(db) {
   // ─── Assemble markdown ────────────────────────────────────────────────────
   const lines = [
     ...(painAlertLine ? [painAlertLine, ''] : []),
+    ...(swimSwapAlert ? [swimSwapAlert, ''] : []),
     ...(stopLossHint ? [`> ⚠ **${stopLossHint}**`, ''] : []),
     '# IM_LP2027 Progress Snapshot',
     `Generated: ${formatGeneratedAt()} | Plan ID ${planId} v${activePlan?.version ?? '?'} | DB: ${dbAbsPath} | Spec: v2.0 | Spec changed: 2026-10-05 | Wk ${wkNum} of ${TOTAL_PLAN_WEEKS} — ${phaseName}`,
@@ -790,6 +858,7 @@ function generateSnapshot(db) {
     extraHeader,
     extraRows || '| — | — | — | — | — | — | — | — |',
     ...(unplannedNote ? ['', unplannedNote] : []),
+    ...(swimSwapNoteCurrWk ? ['', swimSwapNoteCurrWk] : []),
     '',
     `## Wellness — Last 14 Days`,
     wellnessHeader,

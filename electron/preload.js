@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPlan: () => ipcRenderer.invoke('plan:get'),
   regeneratePlan: () => ipcRenderer.invoke('plan:regenerate'),
   getPlannedSessions: (filters) => ipcRenderer.invoke('sessions:planned:list', filters),
+  getWeekPlannedSessions: (date) => ipcRenderer.invoke('sessions:planned:week', date),
 
   // Logging
   logSession: (session) => ipcRenderer.invoke('sessions:log', session),

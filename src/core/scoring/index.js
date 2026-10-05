@@ -5,6 +5,38 @@ const IMP_W = { key: 10, supporting: 4, optional: 1 }
 // B1: excused reasons remove session from both numerator and denominator
 const EXCUSED_REASONS = new Set(['illness', 'pain', 'coach-adjusted'])
 
+// ─── Swap validation (A3) ─────────────────────────────────────────────────────
+
+const _IMP_ORDER = { key: 0, supporting: 1, optional: 2 }
+
+/**
+ * Returns null if valid, or an error string if the swap violates A3 constraints.
+ * @param {Object} replacedPlan   planned session being replaced {id, discipline, importance, date}
+ * @param {string} loggedDate     YYYY-MM-DD
+ * @param {string} loggedDisc     discipline of the logged session
+ * @param {Array}  weekPlans      all non-optional planned sessions in the same week
+ */
+function validateSwap(replacedPlan, loggedDate, loggedDisc, weekPlans) {
+  if (getWeekStart(loggedDate) !== getWeekStart(replacedPlan.date)) {
+    return 'Swaps must stay within the same week.'
+  }
+  const sameDayPlan = weekPlans.find(p =>
+    p.discipline === loggedDisc && p.date === loggedDate && p.importance !== 'optional' && p.id !== replacedPlan.id
+  )
+  if (sameDayPlan && (_IMP_ORDER[sameDayPlan.importance] ?? 3) <= (_IMP_ORDER[replacedPlan.importance] ?? 3)) {
+    return 'A session exists for this discipline on the same day with equal or higher priority than the replaced session.'
+  }
+  if (replacedPlan.importance === 'key') {
+    const weeklyForDisc = weekPlans.filter(p =>
+      p.discipline === loggedDisc && p.importance !== 'optional' && p.id !== replacedPlan.id
+    )
+    if (weeklyForDisc.length > 0) {
+      return 'A KEY session can only be replaced by a KEY-tier effort in the same discipline or an equivalent KEY session.'
+    }
+  }
+  return null
+}
+
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
 function dateAdd(dateStr, days) {
@@ -107,8 +139,19 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
 
   const impOrder = { key: 0, supporting: 1, optional: 2 }
 
-  // A2: merge same-day same-discipline logs before matching
-  const mergedLogs = mergeLogsByDayDisc(loggedRows)
+  const matchMap = new Map()
+
+  // Swap pre-pass: match swap logs directly to their specified planned sessions before merging
+  const swapLogOrigIds = new Set()
+  for (const l of loggedRows) {
+    if (l.reason === 'swapped' && l.swap_planned_id != null) {
+      const plan = included.find(p => p.id === l.swap_planned_id && !matchMap.has(p))
+      if (plan) { matchMap.set(plan, l); swapLogOrigIds.add(l.id) }
+    }
+  }
+
+  // A2: merge same-day same-discipline logs before matching (exclude swap logs)
+  const mergedLogs = mergeLogsByDayDisc(loggedRows.filter(l => !swapLogOrigIds.has(l.id)))
 
   // hasEarlierPlan guard — computed on original rows, then mapped onto merged
   const hasEarlierPlanOrigIds = new Set()
@@ -155,8 +198,6 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
       return l.id <= best.id ? l : best
     })
   }
-
-  const matchMap = new Map()
 
   // Pre-pass: A9 Race sessions — 100% if multisport/triathlon activity OR any swim/bike/run logs on race date
   for (const p of included.filter(p => p.discipline === 'race')) {
@@ -278,6 +319,8 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
     const flags = []
 
     if (matched) {
+      if (swapLogOrigIds.has(matched.id)) flags.push('swapped')
+
       pct = (matched.duration || 0) / p.target_duration
 
       if (p.discipline === 'race') {
@@ -456,4 +499,4 @@ function computePainAlert(loggedRows) {
   return 0
 }
 
-module.exports = { IMP_W, sessionCredit, gradeFromScore, computeScore, computeRecovery, computePainAlert, dateAdd, getWeekStart, getWeekEnd }
+module.exports = { IMP_W, sessionCredit, gradeFromScore, computeScore, computeRecovery, computePainAlert, validateSwap, dateAdd, getWeekStart, getWeekEnd }

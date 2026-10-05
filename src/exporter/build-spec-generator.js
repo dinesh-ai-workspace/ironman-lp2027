@@ -240,6 +240,35 @@ Swim has no overshoot penalty — extra swim time is welcome on the limiter.
 
 **C4. Minimum data:** if a completed week has fewer than 4 nights with data, Status = "insufficient data". The in-progress week shows a colour only once it has ≥ 4 nights.
 
+**Swap reason and matching (A1–A5):**
+
+A1. "swapped" is an additional session reason. When selected in the Logger UI, two extra fields appear: "Replaced planned session" (dropdown of non-optional planned sessions in the current week) and an optional free-text Note.
+
+A2. A swapped session is matched to the planned session the athlete selected, regardless of discipline. Scoring uses the planned session's duration, tier, and weight.
+
+A3. Swap constraints (enforced in the UI; if violated, show an error and do not save):
+- The replaced planned session must be in the same Mon–Sun week as the logged session.
+- If a non-optional planned session for the logged discipline exists on the same day, its tier must be lower than the replaced session's tier.
+- If the replaced planned session is KEY, no non-optional planned session for the logged discipline may exist in the same week.
+
+A4. The session log Status column shows "swapped (swim → bike)" or similar for the logged row; the replaced planned session row shows "covered by swap".
+
+A5. The matched planned session is considered covered (not pending or missed).
+
+**Swim swap alert (B1–B2):**
+
+B1. If any swim session (KEY or supporting) is replaced by a non-swim session via a swap in the current week, add a line in the session log section: "Note: N swim session(s) swapped to other discipline this week."
+
+B2. If 2 or more swim sessions are swapped to a non-swim discipline within any 14-day window, add a line at the top of the snapshot (below any pain alert): "⚠ Swim swap pattern: N swim sessions replaced in 14 days — coach review."
+
+**Snapshot session log (C1–C3):**
+
+C1. The planned session row that was replaced shows "covered by swap" in the Status column.
+
+C2. The logged session row shows "swapped (from→to)" in the Status column with the discipline it replaced.
+
+C3. Swapped sessions are NOT shown in the Extra sessions subsection. They are shown inline with the planned sessions they replaced (two consecutive rows per swap).
+
 ---
 
 ## E. Snapshot — Data Freshness Block (CN-5 #3 Part A)
@@ -294,6 +323,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-05 | **CN-5 #6** — Gate tests scheduled: Wk 8 swim time_trial 40 min; Wk 12/20/26 swim continuous_test 50/70/80 min; Wk 16 bike ftp_test 60 min; Wk 24 run time_trial 60 min; Wk 34 purpose update; Wk 35 swim 100→110 min. Run frequency: Tue easy run added Wks 6–14 (25 min, 20 min cutback). Sunday recovery run → supporting Wks 6–28. Wk 38 DR and Wk 45 race zone → Z2. A8 adds continuous_test. Build spec A layout/notes + A8 + changelog updated |
 | 2026-10-05 | **CN-5 #7** — Recovery Wk 29 (515 min, all Z1–Z2). Wk 39: Thu long_run→easy 50, Sun long_run 150 KEY. Wk 41: Sat 240 KEY, Thu long_run 150 KEY. Wks 42–44 taper replaced with race-pace structure (525/385/305 min). 14 h cap now applies to swim+bike+run only (strength excluded). Masters strength 30 min Wed optional added Wks 30–41 (excl. cutback Wks 32/36/40 and DR Wk 38). Build spec load rule, A/B layout, taper section updated |
 | 2026-10-05 | **CN-5 #8** — Session reason field (A1–A3): completed/life/equipment/illness/pain/coach-adjusted/other; stored in logged_sessions.reason. Excused sessions (B1–B4): illness/pain/coach-adjusted removed from numerator+denominator, no KEY-missed cap. Pain alert (C1–C3): ≥2 pain sessions in any 14-day window → alert at top of snapshot. Extra sessions (D1–D5): unplanned sessions in separate subsection; makeup-auth mechanism; D5 note if >90 min unplanned/week. Build spec D A1–D5 added; changelog updated |
+| 2026-10-05 | **CN-5 #9** — Swap reason: "swapped" added to session reason field; cross-discipline matching via swap_planned_id/swap_planned_discipline columns on logged_sessions. Swap constraints A3 enforced in Logger UI. Snapshot session log shows "covered by swap" (planned row) and "swapped (from→to)" (logged row). Swim swap note if any swim swapped this week; swim swap alert (≥2 in 14 days) at top of snapshot. Raw Garmin lines (RHR/HRV/Body Battery/Sleep Score) stripped from Athlete Notes section (already in Wellness table). Build spec D swap rules A1–C3 added; changelog updated |
 
 ---
 

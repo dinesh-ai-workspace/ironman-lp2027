@@ -16,6 +16,35 @@ function Toast({ msg, type, onDone }) {
   )
 }
 
+// A3 swap validation — mirrors validateSwap in src/core/scoring/index.js
+const _IMP_ORDER = { key: 0, supporting: 1, optional: 2 }
+function validateSwapUI(replacedPlan, loggedDate, loggedDisc, weekPlans) {
+  function weekStart(ds) {
+    const d = new Date(ds + 'T00:00:00Z')
+    d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7)
+    return d.toISOString().slice(0, 10)
+  }
+  if (weekStart(loggedDate) !== weekStart(replacedPlan.date)) {
+    return 'Swaps must stay within the same week.'
+  }
+  const sameDayPlan = weekPlans.find(p =>
+    p.discipline === loggedDisc && p.date === loggedDate &&
+    p.importance !== 'optional' && p.id !== replacedPlan.id
+  )
+  if (sameDayPlan && (_IMP_ORDER[sameDayPlan.importance] ?? 3) <= (_IMP_ORDER[replacedPlan.importance] ?? 3)) {
+    return 'A session exists for this discipline on the same day with equal or higher priority than the replaced session.'
+  }
+  if (replacedPlan.importance === 'key') {
+    const weeklyForDisc = weekPlans.filter(p =>
+      p.discipline === loggedDisc && p.importance !== 'optional' && p.id !== replacedPlan.id
+    )
+    if (weeklyForDisc.length > 0) {
+      return 'A KEY session can only be replaced by a KEY-tier effort in the same discipline or an equivalent KEY session.'
+    }
+  }
+  return null
+}
+
 export default function Logger() {
   const noAPI = typeof window.electronAPI === 'undefined'
 
@@ -31,6 +60,7 @@ export default function Logger() {
     planned_session_id: '',
     is_brick: false,
     reason: 'completed',
+    swap_planned_id: '',
     // Bike-specific
     avg_power: '',
     normalized_power: '',
@@ -42,6 +72,7 @@ export default function Logger() {
   })
 
   const [plannedOptions, setPlannedOptions] = useState([])
+  const [weekPlans, setWeekPlans] = useState([])
   const [toast, setToast] = useState(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -52,6 +83,14 @@ export default function Logger() {
       .then(sessions => setPlannedOptions(sessions || []))
       .catch(() => setPlannedOptions([]))
   }, [form.date, form.discipline])
+
+  // Load all week plans when reason = 'swapped'
+  useEffect(() => {
+    if (noAPI || form.reason !== 'swapped') { setWeekPlans([]); return }
+    window.electronAPI.getWeekPlannedSessions(form.date)
+      .then(plans => setWeekPlans(plans || []))
+      .catch(() => setWeekPlans([]))
+  }, [form.reason, form.date])
 
   function setField(key, val) {
     setForm(f => ({ ...f, [key]: val }))
@@ -65,13 +104,34 @@ export default function Logger() {
       return
     }
 
+    // A3: swap validation
+    if (form.reason === 'swapped') {
+      if (!form.swap_planned_id) {
+        setToast({ msg: 'Select the planned session being replaced.', type: 'error' })
+        return
+      }
+      const replacedPlan = weekPlans.find(p => p.id === parseInt(form.swap_planned_id))
+      if (!replacedPlan) {
+        setToast({ msg: 'Selected planned session not found.', type: 'error' })
+        return
+      }
+      const swapErr = validateSwapUI(replacedPlan, form.date, form.discipline, weekPlans)
+      if (swapErr) {
+        setToast({ msg: swapErr, type: 'error' })
+        return
+      }
+    }
+
     setSubmitting(true)
     try {
       const dur = parseInt(form.duration) || 0
       const selectedPlan = plannedOptions.find(s => s.id === parseInt(form.planned_session_id))
-      const effectiveReason = (dur === 0 || !form.duration || (selectedPlan && dur < selectedPlan.target_duration))
-        ? (form.reason || 'completed')
-        : 'completed'
+      const isSwap = form.reason === 'swapped'
+      const effectiveReason = isSwap
+        ? 'swapped'
+        : (dur === 0 || !form.duration || (selectedPlan && dur < selectedPlan.target_duration))
+          ? (form.reason || 'completed')
+          : 'completed'
 
       const payload = {
         date: form.date,
@@ -83,7 +143,14 @@ export default function Logger() {
         notes: form.notes,
         planned_session_id: form.planned_session_id ? parseInt(form.planned_session_id) : null,
         source: 'manual',
-        reason: effectiveReason !== 'completed' ? effectiveReason : null,
+        reason: (effectiveReason !== 'completed') ? effectiveReason : null,
+      }
+
+      if (isSwap && form.swap_planned_id) {
+        const replacedPlan = weekPlans.find(p => p.id === parseInt(form.swap_planned_id))
+        payload.swap_planned_id = parseInt(form.swap_planned_id)
+        payload.swap_planned_discipline = replacedPlan?.discipline || null
+        payload.planned_session_id = null
       }
 
       if (form.discipline === 'bike') {
@@ -102,7 +169,7 @@ export default function Logger() {
 
       await window.electronAPI.logSession(payload)
       setToast({ msg: 'Session logged successfully!', type: 'success' })
-      setForm(f => ({ ...f, duration: '', distance: '', avg_hr: '', rpe: '', notes: '', planned_session_id: '', avg_power: '', normalized_power: '', avg_cadence: '', is_brick: false, reason: 'completed' }))
+      setForm(f => ({ ...f, duration: '', distance: '', avg_hr: '', rpe: '', notes: '', planned_session_id: '', swap_planned_id: '', avg_power: '', normalized_power: '', avg_cadence: '', is_brick: false, reason: 'completed' }))
     } catch (err) {
       setToast({ msg: err.message || 'Failed to log session', type: 'error' })
     } finally {
@@ -244,26 +311,35 @@ export default function Logger() {
             </div>
           )}
 
-          {/* Reason — A1: show only when actual < planned or logging missed */}
-          {(() => {
-            const dur = parseInt(form.duration) || 0
-            const selPlan = plannedOptions.find(s => s.id === parseInt(form.planned_session_id))
-            const showReason = !form.duration || dur === 0 || (selPlan && dur < selPlan.target_duration)
-            return showReason ? (
-              <div className="form-group">
-                <label>Reason</label>
-                <select value={form.reason} onChange={e => setField('reason', e.target.value)}>
-                  <option value="completed">completed</option>
-                  <option value="life">life (schedule / travel / work)</option>
-                  <option value="equipment">equipment (gear failure / pool closed / weather)</option>
-                  <option value="illness">illness</option>
-                  <option value="pain">pain</option>
-                  <option value="coach-adjusted">coach-adjusted</option>
-                  <option value="other">other</option>
-                </select>
-              </div>
-            ) : null
-          })()}
+          {/* Reason */}
+          <div className="form-group">
+            <label>Reason</label>
+            <select value={form.reason} onChange={e => setField('reason', e.target.value)}>
+              <option value="completed">completed</option>
+              <option value="life">life (schedule / travel / work)</option>
+              <option value="equipment">equipment (gear failure / pool closed / weather)</option>
+              <option value="illness">illness</option>
+              <option value="pain">pain</option>
+              <option value="coach-adjusted">coach-adjusted</option>
+              <option value="swapped">swapped (different discipline)</option>
+              <option value="other">other</option>
+            </select>
+          </div>
+
+          {/* Swap replacement picker — A1 */}
+          {form.reason === 'swapped' && (
+            <div className="form-group">
+              <label>Replaced Planned Session *</label>
+              <select value={form.swap_planned_id} onChange={e => setField('swap_planned_id', e.target.value)}>
+                <option value="">— select session being replaced —</option>
+                {weekPlans.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.date} {s.discipline} ({s.importance}) {s.target_duration} min
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="form-group">
             <label>Notes (optional)</label>
