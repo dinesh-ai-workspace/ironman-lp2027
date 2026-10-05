@@ -139,17 +139,15 @@ function formatShortDate(isoStr) {
 
 function letterGrade(score) {
   if (score >= 90) return 'A'
-  if (score >= 75) return 'B'
-  if (score >= 60) return 'C'
-  if (score >= 45) return 'D'
-  return 'F'
+  if (score >= 70) return 'B'
+  if (score >= 50) return 'C'
+  return 'D'
 }
 
 function gradeColor(score) {
   if (score >= 90) return 'var(--accent-green)'
-  if (score >= 75) return '#86efac'
-  if (score >= 60) return 'var(--accent-amber)'
-  if (score >= 45) return '#fb923c'
+  if (score >= 70) return '#86efac'
+  if (score >= 50) return 'var(--accent-amber)'
   return '#ef4444'
 }
 
@@ -192,13 +190,16 @@ function computeWeekCompliance(days, todayISO) {
   // Pick best log: duration closeness → (cross-day: date distance) → earlier log date → smaller id
   function pickBest(plan, candidates, crossDay = false) {
     return candidates.reduce((best, d) => {
-      const dd = Math.abs(d.duration - plan.target_duration)
-      const bd = Math.abs(best.duration - plan.target_duration)
-      if (dd !== bd) return dd < bd ? d : best
       if (crossDay) {
         const dDist = daysDiff(d.dateStr, plan.dateStr)
         const bDist = daysDiff(best.dateStr, plan.dateStr)
         if (dDist !== bDist) return dDist < bDist ? d : best
+        const ld = d.duration || 0, bd2 = best.duration || 0
+        if (ld !== bd2) return ld > bd2 ? d : best
+      } else {
+        const dd = Math.abs((d.duration || 0) - plan.target_duration)
+        const bd = Math.abs((best.duration || 0) - plan.target_duration)
+        if (dd !== bd) return dd < bd ? d : best
       }
       if (d.dateStr !== best.dateStr) return d.dateStr < best.dateStr ? d : best
       return String(d.id) <= String(best.id) ? d : best
@@ -311,20 +312,23 @@ function computeWeekCompliance(days, todayISO) {
 
   for (const r of matchedRows) {
     if (!r.planned) continue
+    const isOpt = r.planned.importance === 'optional'
     const w = IMP_W[r.planned.importance] || 1
 
     if (r.status === 'pending') {
-      pendingPts += w
+      if (!isOpt) pendingPts += w
       if (r.planned.importance === 'key') keyTotal++
       else if (r.planned.importance === 'supporting') supTotal++
       else optTotal++
       continue
     }
 
-    maxPts += w
     const credit = sessionCredit(r.pct ?? 0, r.planned?.discipline)
-    earned += w * credit
-    const full = credit >= 1.0
+    if (!isOpt) {
+      maxPts += w
+      earned += w * credit
+    }
+    const full = credit > 0
     if (r.planned.importance === 'key')       { keyTotal++; if (full) keyDone++ }
     else if (r.planned.importance === 'supporting') { supTotal++; if (full) supDone++ }
     else                                       { optTotal++; if (full) optDone++ }
