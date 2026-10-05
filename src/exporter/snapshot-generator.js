@@ -1,12 +1,13 @@
 'use strict'
 
 const path = require('path')
-const { computeScore, computeRecovery, IMP_W } = require('../core/scoring')
+const { computeScore, computeRecovery, computePainAlert, IMP_W } = require('../core/scoring')
 const { deriveBikeZones, deriveRunZones, deriveSwimPace } = require('../core/scoring/zones')
 const { classifyDayType, computeWeightedTrainMin, calorieStatus, isComplete, hitsProtein, isLowCarb, computeWeeklyFueling, computeWeightTrend, formatFreshness, sevenDayAvg, CALORIE_RANGES } = require('../core/fueling')
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PLAN_START_STR = '2026-09-14'
+const EXCUSED_REASONS = new Set(['illness', 'pain', 'coach-adjusted'])
 const PLAN_START = new Date(PLAN_START_STR + 'T00:00:00Z')
 const TOTAL_PLAN_WEEKS = 45
 
@@ -154,7 +155,7 @@ function generateSnapshot(db) {
     ).all(planId, startStr, endStr)
 
     const loggedRows = db.prepare(
-      'SELECT id, discipline, duration, date, avg_hr FROM logged_sessions WHERE date>=? AND date<=?'
+      'SELECT id, discipline, duration, date, avg_hr, reason FROM logged_sessions WHERE date>=? AND date<=?'
     ).all(startStr, endStr)
 
     const wellnessRows = db.prepare(
@@ -205,6 +206,7 @@ function generateSnapshot(db) {
       earnedPts: scoreResult?.earnedPts ?? null,
       totalWeight: scoreResult?.totalWeight ?? null,
       matchDetails: scoreResult?.matchDetails ?? [],
+      excusedCount: scoreResult?.excusedCount ?? 0,
       plannedH, actualH,
       swimA, swimP, bikeA, bikeP, runA, runP,
       strDone, strPlanned,
@@ -215,9 +217,12 @@ function generateSnapshot(db) {
 
   const weeklyHeader = '| Wk | Dates | Score | Grade | Cap | Planned h | Actual h | Swim A/P | Bike A/P | Run A/P | Str done/pl | KEYs done | Recovery | Fueling |\n' +
                        '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'
-  const weeklyRows = completedWeeks.map(w =>
-    `| ${w.wk} | ${w.startStr}–${w.endStr} | ${w.score ?? '—'} | ${w.grade} | ${w.cap} | ${w.plannedH} | ${w.actualH} | ${w.swimA}/${w.swimP} | ${w.bikeA}/${w.bikeP} | ${w.runA}/${w.runP} | ${w.strDone}/${w.strPlanned} | ${w.keyDone}/${w.keyTotal} | ${w.recovery.status} | ${w.fueling.status} |`
-  ).join('\n')
+  const weeklyRows = completedWeeks.map(w => {
+    const scoreStr = w.score != null
+      ? (w.excusedCount > 0 ? `${w.score} (${w.excusedCount} excused)` : String(w.score))
+      : '—'
+    return `| ${w.wk} | ${w.startStr}–${w.endStr} | ${scoreStr} | ${w.grade} | ${w.cap} | ${w.plannedH} | ${w.actualH} | ${w.swimA}/${w.swimP} | ${w.bikeA}/${w.bikeP} | ${w.runA}/${w.runP} | ${w.strDone}/${w.strPlanned} | ${w.keyDone}/${w.keyTotal} | ${w.recovery.status} | ${w.fueling.status} |`
+  }).join('\n')
 
   // ─── Recovery table ────────────────────────────────────────────────────────
   const recoveryHeader = '| Wk | Good nights | Nights with data | % | Status | Avg sleep h | Avg bedtime | Avg RHR | Avg Body Battery |\n' +
@@ -244,15 +249,19 @@ function generateSnapshot(db) {
     bLines.push('| Date | Disc | Tier | Weight | Plan min | Actual min | Ratio % | Credit % | Points | Flags |')
     bLines.push('|---|---|---|---|---|---|---|---|---|---|')
     for (const d of w.matchDetails) {
-      const wt = IMP_W[d.plan.importance] || 1
+      const isExcused = d.flags.includes('excused')
+      const wt = isExcused ? '—' : IMP_W[d.plan.importance] || 1
       const ratio = d.pct != null ? Math.round(d.pct * 100) + '%' : '—'
-      const creditPct = Math.round(d.credit * 100) + '%'
-      const pts = (wt * d.credit).toFixed(1)
-      const flags = d.flags.length > 0 ? d.flags.join(', ') : '—'
+      const creditPct = isExcused
+        ? `excused (${d.log?.reason ?? 'excused'})`
+        : Math.round(d.credit * 100) + '%'
+      const pts = isExcused ? '—' : (IMP_W[d.plan.importance] * d.credit).toFixed(1)
+      const flags = d.flags.filter(f => f !== 'excused').join(', ') || (isExcused ? '—' : '—')
       const actualMin = d.log ? fmtInt(d.log.duration) : '—'
       bLines.push(`| ${d.plan.date} | ${d.plan.discipline} | ${d.plan.importance} | ${wt} | ${d.plan.target_duration} | ${actualMin} | ${ratio} | ${creditPct} | ${pts} | ${flags} |`)
     }
-    bLines.push(`**Total: ${(w.earnedPts ?? 0).toFixed(1)} ÷ ${w.totalWeight} = ${w.score}**`)
+    const excusedSuffix = w.excusedCount > 0 ? ` (${w.excusedCount} excused)` : ''
+    bLines.push(`**Total: ${(w.earnedPts ?? 0).toFixed(1)} ÷ ${w.totalWeight} = ${w.score}${excusedSuffix}**`)
     breakdownSections.push(bLines.join('\n'))
   }
 
@@ -268,7 +277,7 @@ function generateSnapshot(db) {
   `).all(planId, since14, today)
 
   const logged14 = db.prepare(`
-    SELECT * FROM logged_sessions WHERE date>=? AND date<=? ORDER BY date, discipline
+    SELECT *, reason FROM logged_sessions WHERE date>=? AND date<=? ORDER BY date, discipline
   `).all(since14, today)
 
   // ── 3-pass matching (mirrors computeScore logic) ──────────────────────────
@@ -330,8 +339,9 @@ function generateSnapshot(db) {
     if (cands.length > 0) { const best = pickBest14(p, cands, true); usedIds14.add(best.id); matchMap14.set(p.id, { plan: p, log: best }) }
   }
 
-  // Build session lines
+  // Build session lines (planned) and extra lines (unplanned)
   const sessionLines = []
+  const extraLines = []
 
   // Matched and unmatched planned sessions
   for (const p of planned14) {
@@ -340,9 +350,11 @@ function generateSnapshot(db) {
       const { log } = m
       const pct = p.target_duration > 0 ? (log.duration || 0) / p.target_duration : null
       const dayDiff = days14(log.date, p.date)
+      const isExcused = log.reason && EXCUSED_REASONS.has(log.reason)
       let status = '✓ matched'
-      if (dayDiff > 0) status = `✓ matched (${log.date < p.date ? '-' : '+'}${Math.round(dayDiff)}d)`
-      if (pct != null && pct < 0.85) status = status.replace('✓', '⚠')
+      if (isExcused) status = `excused (${log.reason})`
+      else if (dayDiff > 0) status = `✓ matched (${log.date < p.date ? '-' : '+'}${Math.round(dayDiff)}d)`
+      if (!isExcused && pct != null && pct < 0.85) status = status.replace('✓', '⚠')
       sessionLines.push({
         date: p.date, disc: p.discipline, tier: p.importance,
         planMin: p.target_duration, actualMin: fmtInt(log.duration),
@@ -350,30 +362,49 @@ function generateSnapshot(db) {
         pace: calcPace(p.discipline, log.duration, log.distance),
         avgHr: dash(log.avg_hr), powerPace: dash(log.avg_power),
         rpe: dash(log.rpe), status,
+        reason: (log.reason && log.reason !== 'completed') ? log.reason : '—',
         note: (log.notes||'').slice(0, 40) || '—',
       })
     } else if (p.date < today) {
-      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '✗ missed', note: '—' })
+      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '✗ missed', reason: '—', note: '—' })
     } else if (p.date === today) {
-      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '⏳ pending', note: '—' })
+      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '⏳ pending', reason: '—', note: '—' })
     }
     // future dates: skip
   }
 
-  // Unmatched logged sessions (unplanned)
+  // Unmatched logged sessions → Extra sessions (D4)
+  const currWkStart = weekStartFor(wkNum)
+  let unplannedMinCurrWk = 0
   for (const l of logged14) {
     if (!usedIds14.has(l.id)) {
-      sessionLines.push({ date: l.date, disc: l.discipline, tier: '—', planMin: '—', actualMin: fmtInt(l.duration), dist: l.distance != null ? fmt2(l.distance) : '—', pace: calcPace(l.discipline, l.duration, l.distance), avgHr: dash(l.avg_hr), powerPace: dash(l.avg_power), rpe: dash(l.rpe), status: '+ unplanned', note: (l.notes||'').slice(0,40)||'—' })
+      if (l.date >= currWkStart && l.date <= today) {
+        unplannedMinCurrWk += (l.duration || 0)
+      }
+      extraLines.push({ date: l.date, disc: l.discipline, dur: fmtInt(l.duration), dist: l.distance != null ? fmt2(l.distance) : '—', pace: calcPace(l.discipline, l.duration, l.distance), avgHr: dash(l.avg_hr), rpe: dash(l.rpe), note: (l.notes||'').slice(0,40)||'—' })
     }
   }
 
   sessionLines.sort((a, b) => b.date.localeCompare(a.date))
+  extraLines.sort((a, b) => b.date.localeCompare(a.date))
 
-  const sessionHeader = '| Date | Disc | Tier | Plan min | Actual min | Dist mi | Pace | Avg HR bpm | Power W | RPE | Status | Note |\n' +
-                        '|---|---|---|---|---|---|---|---|---|---|---|---|'
+  const sessionHeader = '| Date | Disc | Tier | Plan min | Actual min | Dist mi | Pace | Avg HR bpm | Power W | RPE | Status | Reason | Note |\n' +
+                        '|---|---|---|---|---|---|---|---|---|---|---|---|---|'
   const sessionRows = sessionLines.map(s =>
-    `| ${s.date} | ${s.disc} | ${s.tier} | ${s.planMin} | ${s.actualMin} | ${s.dist} | ${s.pace} | ${s.avgHr} | ${s.powerPace} | ${s.rpe} | ${s.status} | ${s.note} |`
+    `| ${s.date} | ${s.disc} | ${s.tier} | ${s.planMin} | ${s.actualMin} | ${s.dist} | ${s.pace} | ${s.avgHr} | ${s.powerPace} | ${s.rpe} | ${s.status} | ${s.reason} | ${s.note} |`
   ).join('\n')
+
+  const extraHeader = '| Date | Disc | Duration min | Dist mi | Pace | Avg HR bpm | RPE | Note |\n' +
+                      '|---|---|---|---|---|---|---|---|'
+  const extraRows = extraLines.map(e =>
+    `| ${e.date} | ${e.disc} | ${e.dur} | ${e.dist} | ${e.pace} | ${e.avgHr} | ${e.rpe} | ${e.note} |`
+  ).join('\n')
+
+  // D5: unplanned >90 min in current week
+  const unplannedNote = unplannedMinCurrWk > 90
+    ? `Note: ${unplannedMinCurrWk} min of unplanned activity this week — coach visibility.`
+    : null
+
 
   // ─── Section 3: Wellness — Last 14 Days ───────────────────────────────────
   const wellness14 = db.prepare(
@@ -695,6 +726,15 @@ function generateSnapshot(db) {
     ...(anyCoreStaleness ? ['⚠ Import pending — Recovery/Fueling for the current week may be understated.'] : []),
   ].join('\n')
 
+  // C2: pain alert — rolling 14-day window across all recent logged sessions
+  const logged14ForPain = db.prepare(
+    'SELECT reason FROM logged_sessions WHERE date>=? AND date<=? AND reason IS NOT NULL'
+  ).all(since14, today)
+  const painCount = computePainAlert(logged14ForPain)
+  const painAlertLine = painCount >= 2
+    ? `⚠ Pain alert: ${painCount} pain-flagged sessions in 14 days — coach review required.`
+    : null
+
   // C5: stop-loss hint
   let stopLossHint = null
   if (completedWeeks.length >= 2) {
@@ -711,6 +751,7 @@ function generateSnapshot(db) {
 
   // ─── Assemble markdown ────────────────────────────────────────────────────
   const lines = [
+    ...(painAlertLine ? [painAlertLine, ''] : []),
     ...(stopLossHint ? [`> ⚠ **${stopLossHint}**`, ''] : []),
     '# IM_LP2027 Progress Snapshot',
     `Generated: ${formatGeneratedAt()} | Plan ID ${planId} v${activePlan?.version ?? '?'} | DB: ${dbAbsPath} | Spec: v2.0 | Spec changed: 2026-10-05 | Wk ${wkNum} of ${TOTAL_PLAN_WEEKS} — ${phaseName}`,
@@ -743,7 +784,12 @@ function generateSnapshot(db) {
     '',
     `## Session Log — Last 14 Days`,
     sessionHeader,
-    sessionRows || '| — | — | — | — | — | — | — | — | — | — | No sessions | — |',
+    sessionRows || '| — | — | — | — | — | — | — | — | — | — | No sessions | — | — |',
+    '',
+    '### Extra Sessions (unplanned)',
+    extraHeader,
+    extraRows || '| — | — | — | — | — | — | — | — |',
+    ...(unplannedNote ? ['', unplannedNote] : []),
     '',
     `## Wellness — Last 14 Days`,
     wellnessHeader,

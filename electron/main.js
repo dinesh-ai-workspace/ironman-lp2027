@@ -345,11 +345,11 @@ ipcMain.handle('sessions:log', (event, session) => {
     INSERT INTO logged_sessions
       (planned_session_id, discipline, date, start_datetime, end_datetime, duration, distance,
        avg_hr, rpe, notes, is_brick, avg_power, normalized_power, avg_cadence,
-       environment, wetsuit_used, pool_length_m, source, import_batch_id)
+       environment, wetsuit_used, pool_length_m, source, import_batch_id, reason)
     VALUES
       (@planned_session_id, @discipline, @date, @start_datetime, @end_datetime, @duration, @distance,
        @avg_hr, @rpe, @notes, @is_brick, @avg_power, @normalized_power, @avg_cadence,
-       @environment, @wetsuit_used, @pool_length_m, @source, @import_batch_id)
+       @environment, @wetsuit_used, @pool_length_m, @source, @import_batch_id, @reason)
   `)
 
   const result = stmt.run({
@@ -372,6 +372,7 @@ ipcMain.handle('sessions:log', (event, session) => {
     pool_length_m: session.pool_length_m ? parseInt(session.pool_length_m) : null,
     source: session.source || 'manual',
     import_batch_id: session.import_batch_id || null,
+    reason: session.reason || null,
   })
 
   // Background sync after session log
@@ -407,7 +408,7 @@ ipcMain.handle('sessions:logged:update', (event, id, data) => {
   const fields = []
   const params = []
   const allowed = ['duration', 'distance', 'avg_hr', 'rpe', 'notes', 'avg_power',
-    'normalized_power', 'avg_cadence', 'environment', 'wetsuit_used', 'pool_length_m']
+    'normalized_power', 'avg_cadence', 'environment', 'wetsuit_used', 'pool_length_m', 'reason']
   for (const key of allowed) {
     if (data[key] !== undefined) {
       fields.push(`${key} = ?`)

@@ -1,6 +1,6 @@
 'use strict'
 
-const { computeScore, computeRecovery, sessionCredit, getWeekStart } = require('../src/core/scoring')
+const { computeScore, computeRecovery, computePainAlert, sessionCredit, getWeekStart } = require('../src/core/scoring')
 const { deriveBikeZones, deriveRunZones } = require('../src/core/scoring/zones')
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -275,4 +275,123 @@ test('F16: race date with a single multisport log of 420 min — race credit 100
   const d = result.matchDetails[0]
   expect(d.credit).toBe(1.0)
   expect(result.score).toBe(100)
+})
+
+// ─── U1–U10: CN-5 #8 reason/excusal/pain/makeup fixtures ─────────────────
+
+test('U1: planned 60 run KEY, actual 45, reason "life" → ratio 75%, credit 60%, not excused', () => {
+  const plan = makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-14' })
+  const log  = { ...makeLog({ id: 1, discipline: 'run', duration: 45, date: '2026-09-14' }), reason: 'life' }
+  const result = computeScore([plan], [log], '2026-09-14')
+  const d = result.matchDetails[0]
+  expect(d.pct).toBeCloseTo(0.75, 5)
+  expect(d.credit).toBe(0.60)
+  expect(d.flags).not.toContain('excused')
+  expect(result.excusedCount).toBe(0)
+})
+
+test('U2: planned 60 run KEY, actual 45, reason "pain" → excused; 0 from denom; no KEY-missed cap', () => {
+  const plan = makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-14' })
+  const log  = { ...makeLog({ id: 1, discipline: 'run', duration: 45, date: '2026-09-14' }), reason: 'pain' }
+  const result = computeScore([plan], [log], '2026-09-14')
+  const d = result.matchDetails[0]
+  expect(d.flags).toContain('excused')
+  expect(result.totalWeight).toBe(0)
+  expect(result.score).toBeNull()
+  expect(result.cap).toBe('—')
+  expect(result.excusedCount).toBe(1)
+})
+
+test('U3: planned 60 run KEY, actual 0, reason "illness" → excused; removed from score', () => {
+  const plan = makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-14' })
+  const log  = { ...makeLog({ id: 1, discipline: 'run', duration: 0, date: '2026-09-14' }), reason: 'illness' }
+  const result = computeScore([plan], [log], '2026-09-14')
+  const d = result.matchDetails[0]
+  expect(d.flags).toContain('excused')
+  expect(result.totalWeight).toBe(0)
+  expect(result.score).toBeNull()
+  expect(result.excusedCount).toBe(1)
+})
+
+test('U4: 2 KEY planned; one 100% completed, one excused-pain → score 100, grade A, no cap, excusedCount 1', () => {
+  const plans = [
+    makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-14' }),
+    makePlan({ id: 2, discipline: 'bike', importance: 'key', target_duration: 60, date: '2026-09-15' }),
+  ]
+  const logs = [
+    makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-09-14' }),
+    { ...makeLog({ id: 2, discipline: 'bike', duration: 30, date: '2026-09-15' }), reason: 'pain' },
+  ]
+  const result = computeScore(plans, logs, '2026-09-20')
+  expect(result.score).toBe(100)
+  expect(result.grade).toBe('A')
+  expect(result.cap).toBe('—')
+  expect(result.excusedCount).toBe(1)
+  // shown as "100 (1 excused)"
+  const scoreStr = result.excusedCount > 0 ? `${result.score} (${result.excusedCount} excused)` : String(result.score)
+  expect(scoreStr).toBe('100 (1 excused)')
+})
+
+test('U5: two pain sessions 7 days apart → pain alert fires (count ≥ 2)', () => {
+  const logs = [
+    { reason: 'pain', date: '2026-09-14' },
+    { reason: 'pain', date: '2026-09-21' },
+  ]
+  expect(computePainAlert(logs)).toBeGreaterThanOrEqual(2)
+})
+
+test('U6: two pain sessions 15 days apart → no pain alert', () => {
+  const logs = [
+    { reason: 'pain', date: '2026-09-14' },
+    { reason: 'pain', date: '2026-09-29' },
+  ]
+  expect(computePainAlert(logs)).toBe(0)
+})
+
+test('U7: unplanned swim 40 min on a day with a planned bike 60 min → bike scored normally; swim in unmatchedLogs', () => {
+  const plan = makePlan({ id: 1, discipline: 'bike', importance: 'key', target_duration: 60, date: '2026-09-14' })
+  const logs = [
+    makeLog({ id: 1, discipline: 'bike', duration: 60, date: '2026-09-14' }),
+    makeLog({ id: 2, discipline: 'swim', duration: 40, date: '2026-09-14' }),
+  ]
+  const result = computeScore([plan], logs, '2026-09-14')
+  const bikeDetail = result.matchDetails.find(d => d.plan.discipline === 'bike')
+  expect(bikeDetail.credit).toBe(1.0)
+  expect(result.unmatchedLogs.length).toBe(1)
+  expect(result.unmatchedLogs[0].discipline).toBe('swim')
+})
+
+test('U8: unplanned sessions total 95 min in a week → note threshold triggered', () => {
+  const plans = [makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-14' })]
+  const logs = [
+    makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-09-14' }),
+    makeLog({ id: 2, discipline: 'other', duration: 95, date: '2026-09-15' }),
+  ]
+  const result = computeScore(plans, logs, '2026-09-20')
+  const unplannedTotal = result.unmatchedLogs.reduce((s, l) => s + (l.duration || 0), 0)
+  expect(unplannedTotal).toBeGreaterThan(90)
+})
+
+test('U9: makeup authorised 2026-10-08 run; log on 2026-10-09 (±2 days) → matched as planned session', () => {
+  const plan = makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-10-08' })
+  const log  = makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-10-09' })
+  const result = computeScore([plan], [log], '2026-10-12', {
+    makeupAuthorizations: [{ date: '2026-10-08', discipline: 'run' }],
+  })
+  const d = result.matchDetails.find(m => m.plan.id === 1)
+  expect(d.log).not.toBeNull()
+  expect(d.credit).toBe(1.0)
+  expect(result.unmatchedLogs.length).toBe(0)
+})
+
+test('U10: makeup authorised 2026-10-08 run; log on 2026-10-11 (3 days out) → treated as unplanned', () => {
+  const plan = makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-10-08' })
+  const log  = makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-10-11' })
+  const result = computeScore([plan], [log], '2026-10-12', {
+    makeupAuthorizations: [{ date: '2026-10-08', discipline: 'run' }],
+  })
+  const d = result.matchDetails.find(m => m.plan.id === 1)
+  expect(d.log).toBeNull()
+  expect(d.flags).toContain('missed')
+  expect(result.unmatchedLogs.length).toBe(1)
 })

@@ -144,9 +144,47 @@ Defined in \`src/core/plan-generator/index.js → buildReadinessGates()\`. Inser
 
 **A10. Swim coverage** (for the cap) = ALL logged swim minutes in the week ÷ planned NON-OPTIONAL swim minutes. If planned non-optional swim minutes = 0, the swim cap does not apply.
 
-**A11. KEY-missed cap** uses only sessions that are "missed" under A5. Pending sessions never trigger it.
+**A11. KEY-missed cap** uses only sessions that are "missed" under A5. Pending and excused sessions never trigger it.
 
 **optional sessions excluded** from both numerator and denominator. Skipping an optional session never lowers the score; completing one never raises it.
+
+**Session reason field (A1–A3):**
+
+A1. An optional Reason field is stored on each logged session. Values: completed (default when actual ≥ planned), life, equipment, illness, pain, coach-adjusted, other. The UI shows the field only when actual duration < planned, or when logging a missed session (actual = 0 or field is empty).
+
+A2. When actual ≥ planned, reason is always "completed" and the field is hidden.
+
+A3. Reason is shown in the session log Status column, e.g. "excused (pain)" or in the score breakdown as "excused (illness)".
+
+**Excused sessions (B1–B4):**
+
+B1. Excused reasons: illness, pain, coach-adjusted.
+
+B2. An excused session is removed from both numerator AND denominator of the week's score. It does not count as a missed KEY session for the grade cap.
+
+B3. The score breakdown total line shows "(N excused)" when N > 0, e.g. "Total: 10.0 ÷ 10 = 100 (1 excused)".
+
+B4. Excused sessions still appear in the session log with "excused (reason)" in the Status column.
+
+**Pain alert (C1–C3):**
+
+C1. Rolling 14-day window of sessions flagged reason = "pain".
+
+C2. If 2 or more pain-flagged sessions fall within any 14-day window (any two dates ≤ 13 days apart), add this line at the TOP of the snapshot (above Data Freshness): "⚠ Pain alert: N pain-flagged sessions in 14 days — coach review required."
+
+C3. Alert clears automatically when the 14-day window drops below 2 pain sessions.
+
+**Extra (unplanned) sessions (D1–D5):**
+
+D1. A logged session with no matching planned session is tagged "unplanned".
+
+D2. Unplanned sessions never raise the score; excluded from numerator and denominator.
+
+D3. Exception — coach-authorised makeup: if a Coaching Notes file contains "makeup authorised: \<date\> \<discipline\>", a session logged within ±2 days (same week) is matched to the original planned session and scored normally.
+
+D4. Unplanned sessions appear in a separate "Extra Sessions (unplanned)" subsection at the bottom of the session log, not mixed into the planned session rows.
+
+D5. If unplanned sessions exceed 90 min in the current week, the snapshot adds: "Note: N min of unplanned activity this week — coach visibility."
 
 **3-pass greedy matching:**
 
@@ -255,6 +293,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-05 | **CN-5 #5** — KEY swim per week (rule K1): longest non-optional swim = KEY; tie → later day; Wk 5 exception (Thu TT); race/DR weeks unchanged; all 41 eligible weeks (1–44 excl. 18, 28, 38) updated in Plan ID 10 in place. K2: both caps display as "swim<75%; KEY missed"; lower cap C wins. Build spec A layout + D K1–K2 updated |
 | 2026-10-05 | **CN-5 #6** — Gate tests scheduled: Wk 8 swim time_trial 40 min; Wk 12/20/26 swim continuous_test 50/70/80 min; Wk 16 bike ftp_test 60 min; Wk 24 run time_trial 60 min; Wk 34 purpose update; Wk 35 swim 100→110 min. Run frequency: Tue easy run added Wks 6–14 (25 min, 20 min cutback). Sunday recovery run → supporting Wks 6–28. Wk 38 DR and Wk 45 race zone → Z2. A8 adds continuous_test. Build spec A layout/notes + A8 + changelog updated |
 | 2026-10-05 | **CN-5 #7** — Recovery Wk 29 (515 min, all Z1–Z2). Wk 39: Thu long_run→easy 50, Sun long_run 150 KEY. Wk 41: Sat 240 KEY, Thu long_run 150 KEY. Wks 42–44 taper replaced with race-pace structure (525/385/305 min). 14 h cap now applies to swim+bike+run only (strength excluded). Masters strength 30 min Wed optional added Wks 30–41 (excl. cutback Wks 32/36/40 and DR Wk 38). Build spec load rule, A/B layout, taper section updated |
+| 2026-10-05 | **CN-5 #8** — Session reason field (A1–A3): completed/life/equipment/illness/pain/coach-adjusted/other; stored in logged_sessions.reason. Excused sessions (B1–B4): illness/pain/coach-adjusted removed from numerator+denominator, no KEY-missed cap. Pain alert (C1–C3): ≥2 pain sessions in any 14-day window → alert at top of snapshot. Extra sessions (D1–D5): unplanned sessions in separate subsection; makeup-auth mechanism; D5 note if >90 min unplanned/week. Build spec D A1–D5 added; changelog updated |
 
 ---
 

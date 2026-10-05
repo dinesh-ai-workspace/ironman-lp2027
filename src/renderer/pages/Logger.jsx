@@ -30,6 +30,7 @@ export default function Logger() {
     notes: '',
     planned_session_id: '',
     is_brick: false,
+    reason: 'completed',
     // Bike-specific
     avg_power: '',
     normalized_power: '',
@@ -66,6 +67,12 @@ export default function Logger() {
 
     setSubmitting(true)
     try {
+      const dur = parseInt(form.duration) || 0
+      const selectedPlan = plannedOptions.find(s => s.id === parseInt(form.planned_session_id))
+      const effectiveReason = (dur === 0 || !form.duration || (selectedPlan && dur < selectedPlan.target_duration))
+        ? (form.reason || 'completed')
+        : 'completed'
+
       const payload = {
         date: form.date,
         discipline: form.discipline,
@@ -76,6 +83,7 @@ export default function Logger() {
         notes: form.notes,
         planned_session_id: form.planned_session_id ? parseInt(form.planned_session_id) : null,
         source: 'manual',
+        reason: effectiveReason !== 'completed' ? effectiveReason : null,
       }
 
       if (form.discipline === 'bike') {
@@ -94,7 +102,7 @@ export default function Logger() {
 
       await window.electronAPI.logSession(payload)
       setToast({ msg: 'Session logged successfully!', type: 'success' })
-      setForm(f => ({ ...f, duration: '', distance: '', avg_hr: '', rpe: '', notes: '', planned_session_id: '', avg_power: '', normalized_power: '', avg_cadence: '', is_brick: false }))
+      setForm(f => ({ ...f, duration: '', distance: '', avg_hr: '', rpe: '', notes: '', planned_session_id: '', avg_power: '', normalized_power: '', avg_cadence: '', is_brick: false, reason: 'completed' }))
     } catch (err) {
       setToast({ msg: err.message || 'Failed to log session', type: 'error' })
     } finally {
@@ -235,6 +243,27 @@ export default function Logger() {
               </select>
             </div>
           )}
+
+          {/* Reason — A1: show only when actual < planned or logging missed */}
+          {(() => {
+            const dur = parseInt(form.duration) || 0
+            const selPlan = plannedOptions.find(s => s.id === parseInt(form.planned_session_id))
+            const showReason = !form.duration || dur === 0 || (selPlan && dur < selPlan.target_duration)
+            return showReason ? (
+              <div className="form-group">
+                <label>Reason</label>
+                <select value={form.reason} onChange={e => setField('reason', e.target.value)}>
+                  <option value="completed">completed</option>
+                  <option value="life">life (schedule / travel / work)</option>
+                  <option value="equipment">equipment (gear failure / pool closed / weather)</option>
+                  <option value="illness">illness</option>
+                  <option value="pain">pain</option>
+                  <option value="coach-adjusted">coach-adjusted</option>
+                  <option value="other">other</option>
+                </select>
+              </div>
+            ) : null
+          })()}
 
           <div className="form-group">
             <label>Notes (optional)</label>

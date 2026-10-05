@@ -2,6 +2,9 @@
 
 const IMP_W = { key: 10, supporting: 4, optional: 1 }
 
+// B1: excused reasons remove session from both numerator and denominator
+const EXCUSED_REASONS = new Set(['illness', 'pain', 'coach-adjusted'])
+
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
 function dateAdd(dateStr, days) {
@@ -41,6 +44,8 @@ function mergeLogsByDayDisc(loggedRows) {
         m.avg_hr = m.avg_hr != null ? Math.max(m.avg_hr, l.avg_hr) : l.avg_hr
       }
       m._ids.push(l.id)
+      // Excused reason on any merged entry propagates to the merged entry
+      if (l.reason && EXCUSED_REASONS.has(l.reason)) m.reason = l.reason
     }
   }
   return [...map.values()]
@@ -94,7 +99,7 @@ const TEST_TYPES = new Set(['ftp_test', 'time_trial', 'continuous_test'])
  * @param {string} options.today       actual current date (ET); defaults to cutoffDate
  */
 function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
-  const { z2Ceilings = {}, today = cutoffDate } = options
+  const { z2Ceilings = {}, today = cutoffDate, makeupAuthorizations = [] } = options
 
   // Exclude optional sessions
   const included = plannedRows.filter(p => p.importance !== 'optional' && p.date <= cutoffDate)
@@ -171,6 +176,21 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
     }
   }
 
+  // D3: makeup pre-pass — coach-authorised makeup sessions matched within ±2 days
+  for (const auth of makeupAuthorizations) {
+    const plan = included.find(p => p.date === auth.date && p.discipline === auth.discipline && !matchMap.has(p))
+    if (!plan) continue
+    const cands = mergedLogs.filter(l =>
+      l.discipline === auth.discipline && !isUsed(l)
+      && daysDiff(l.date, auth.date) <= 2
+      && getWeekStart(l.date) === getWeekStart(auth.date)
+    )
+    if (cands.length > 0) {
+      const best = pickBest(plan, cands, true)
+      useLog(best); matchMap.set(plan, best)
+    }
+  }
+
   // Pass 1: same-day, importance-first (skip race — already handled above)
   const sortedByImp = [...included]
     .filter(p => p.discipline !== 'race')
@@ -243,6 +263,13 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
       continue
     }
 
+    // B2: excused — removed from both numerator and denominator; never triggers KEY-missed cap
+    if (matched && EXCUSED_REASONS.has(matched.reason)) {
+      const excusedPct = p.target_duration > 0 ? (matched.duration || 0) / p.target_duration : null
+      matchDetails.push({ plan: p, log: matched, pct: excusedPct, credit: 0, flags: ['excused'] })
+      continue
+    }
+
     const w = IMP_W[p.importance] || 1
     totalWeight += w
 
@@ -312,6 +339,9 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
 
   const grade = applyGradeCap(baseGrade, cap)
 
+  const excusedCount = matchDetails.filter(d => d.flags.includes('excused')).length
+  const unmatchedLogs = mergedLogs.filter(l => !isUsed(l))
+
   return {
     score,
     grade,
@@ -319,6 +349,8 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
     earnedPts: Math.round(earned * 10) / 10,
     totalWeight,
     matchDetails,
+    excusedCount,
+    unmatchedLogs,
   }
 }
 
@@ -402,4 +434,26 @@ function computeRecovery(wellnessRows) {
   return { goodNights, nightsWithData, pct, status, avgSleepH, avgBedtime, avgRhr, avgBb }
 }
 
-module.exports = { IMP_W, sessionCredit, gradeFromScore, computeScore, computeRecovery, dateAdd, getWeekStart, getWeekEnd }
+// ─── Pain alert (rules C1–C3) ─────────────────────────────────────────────────
+
+/**
+ * Returns the count of pain-flagged sessions in the tightest ≥2 cluster
+ * within any 14-day window (i.e. any two are ≤ 13 days apart), or 0 if none.
+ */
+function computePainAlert(loggedRows) {
+  const painDates = loggedRows
+    .filter(l => l.reason === 'pain')
+    .map(l => l.date)
+    .sort()
+
+  if (painDates.length < 2) return 0
+
+  for (let i = 0; i < painDates.length; i++) {
+    const windowEnd = dateAdd(painDates[i], 13)
+    const count = painDates.filter(d => d >= painDates[i] && d <= windowEnd).length
+    if (count >= 2) return count
+  }
+  return 0
+}
+
+module.exports = { IMP_W, sessionCredit, gradeFromScore, computeScore, computeRecovery, computePainAlert, dateAdd, getWeekStart, getWeekEnd }
