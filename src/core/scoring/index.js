@@ -68,7 +68,9 @@ function gradeFromScore(score) {
 
 function applyGradeCap(grade, cap) {
   const order = { A: 4, B: 3, C: 2, D: 1 }
-  const maxGrade = cap === 'swim<75%' ? 'C' : cap === 'KEY missed' ? 'B' : null
+  // K2: combined cap string uses the lower (stricter) cap
+  const maxGrade = (cap === 'swim<75%' || cap === 'swim<75%; KEY missed') ? 'C'
+    : cap === 'KEY missed' ? 'B' : null
   if (!maxGrade) return grade
   if ((order[grade] || 0) > (order[maxGrade] || 0)) return maxGrade
   return grade
@@ -295,14 +297,18 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
   const swimP = included.filter(p => p.discipline === 'swim').reduce((s, p) => s + p.target_duration, 0)
   const swimA = loggedRows.filter(l => l.discipline === 'swim').reduce((s, l) => s + (l.duration || 0), 0)
 
-  let cap = '—'
-  if (swimP > 0 && swimA / swimP < 0.75) cap = 'swim<75%'
+  const swimCap = swimP > 0 && swimA / swimP < 0.75
 
   // A11: KEY-missed cap only for sessions flagged 'missed' (not 'pending')
   const keyMissed = matchDetails.some(d =>
     d.plan.importance === 'key' && d.flags.includes('missed')
   )
-  if (keyMissed && cap !== 'swim<75%') cap = 'KEY missed'
+
+  // K2: when both caps apply, show both; lower cap (swim<75% → C) wins
+  let cap = '—'
+  if (swimCap && keyMissed) cap = 'swim<75%; KEY missed'
+  else if (swimCap)         cap = 'swim<75%'
+  else if (keyMissed)       cap = 'KEY missed'
 
   const grade = applyGradeCap(baseGrade, cap)
 

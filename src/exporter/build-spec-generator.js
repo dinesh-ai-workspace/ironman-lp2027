@@ -18,6 +18,8 @@ function generateBuildSpec() {
 - Plan generator code changes (developer action)
 - Coach issues a Coaching_Notes file with a structural change; developer implements it
 
+**KEY swim = longest non-optional swim of the week (rule K1). Tie → later day. Exception Wk 5: Thu swim TT is KEY.**
+
 **Weekly layout — Wks 1–14 (Mon = day 0):**
 
 | Day | Session(s) |
@@ -26,7 +28,7 @@ function generateBuildSpec() {
 | Tue | Swim (supporting) |
 | Wed | Bike (supporting) + Strength (optional) |
 | Thu | Long run (KEY) + Swim × 1 (supporting; **Wks 1–4 no Thursday swim**) |
-| Fri | Swim (supporting) + Strength (optional) |
+| Fri | Swim (KEY — longest of week) + Strength (optional) |
 | Sat | Long bike (KEY) |
 | Sun | Easy recovery run (optional) |
 
@@ -38,7 +40,7 @@ function generateBuildSpec() {
 | Tue | Swim (supporting) + Easy run 30 min Z2 (supporting) |
 | Wed | Bike (supporting) + Strength 35 min (optional) |
 | Thu | Long run (KEY) + Swim (supporting) |
-| Fri | Swim (supporting) + Strength 35 min (optional) |
+| Fri | Swim (KEY — longest of week) + Strength 35 min (optional) |
 | Sat | Long bike (KEY) [+ Brick run 20–30 min KEY on Wks 21, 23, 25, 27] |
 | Sun | Easy recovery run (optional) |
 
@@ -169,7 +171,9 @@ Swim has no overshoot penalty — extra swim time is welcome on the limiter.
 **Grade caps** (applied to grade only, never to the numeric score):
 - Swim coverage < 75% per A10 (all logged swim min ÷ planned non-optional swim min) → grade ≤ C (cap: "swim<75%")
 - Any KEY session with 0% credit (missed or < 50% of plan) → grade ≤ B (cap: "KEY missed")
-- If both apply, the lower cap wins ("swim<75%" → C).
+- **K2:** If both caps apply, the Cap column shows "swim<75%; KEY missed" and the lower cap (C) wins.
+
+**K1 — KEY swim selection:** In every week with ≥1 non-optional swim, the longest non-optional swim is KEY; all others are supporting. Tie → later day in the week is KEY. Exceptions: Wk 5 Thu swim TT is KEY; race weeks 18, 28, 45 and Dress Rehearsal week 38 are unchanged.
 
 **Intensity check (Z2 sessions):** For KEY and supporting bike/run sessions with target zone Z2: if avg HR > (Z2 ceiling HR + 5 bpm), credit = credit × 0.6, flag = "too hard". Activated per discipline as soon as its Z2 ceiling HR exists (set after Week 5 tests). Snapshot shows: "Intensity check: active (run ceiling X bpm, bike ceiling Y bpm)" or "Intensity check: inactive (zones not set)".
 
@@ -233,6 +237,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-05 | **CN-5 #2** — Fueling module (\`src/core/fueling/index.js\`): MFP data → per-day classification (Rest/Easy/Moderate/Hard/Long), calorie status (under/in range/over), protein and carb checks, weekly status (Insufficient data / Red / Green / Yellow); snapshot Fueling section (weekly table, 14-day daily table, weight trend, MFP range); Weekly Scores table gains Fueling column; stop-loss hint (C5); build spec section H |
 | 2026-10-05 | **CN-5 #3** — Data freshness block (5 sources, stale flag >2 d, import-pending warning); fueling day-type uses weighted training minutes (swim/bike/run 100%, strength/other 50%), daily table shows "weighted (raw)"; logged threshold raised 800→1,200 kcal; build spec H B1/C1 updated |
 | 2026-10-05 | **CN-5 #4** — Weight trend uses calendar-day 7-day windows (≥3 readings required); trend = (prior 7-day avg − recent 7-day avg) ÷ 2 lb/wk; labels: below target / on target / above target / losing too fast / gaining (Foundation target 0.5–0.75 lb/wk); "Weigh-ins last 7 days: N (target ≥4)" added under Body Composition table; build spec H C3/W1–W5 updated |
+| 2026-10-05 | **CN-5 #5** — KEY swim per week (rule K1): longest non-optional swim = KEY; tie → later day; Wk 5 exception (Thu TT); race/DR weeks unchanged; all 41 eligible weeks (1–44 excl. 18, 28, 38) updated in Plan ID 10 in place. K2: both caps display as "swim<75%; KEY missed"; lower cap C wins. Build spec A layout + D K1–K2 updated |
 
 ---
 
