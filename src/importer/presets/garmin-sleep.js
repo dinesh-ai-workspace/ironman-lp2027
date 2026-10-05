@@ -83,6 +83,16 @@ function parseTabular(content) {
     const rhr = row['Resting Heart Rate'] && row['Resting Heart Rate'] !== '--'
       ? parseInt(row['Resting Heart Rate']) : null
 
+    // Parse numeric HRV (try to extract number, fall back to null)
+    const hrvRaw = row['HRV Status']
+    const hrvNum = hrvRaw && hrvRaw !== '--' ? (parseInt(hrvRaw) || null) : null
+    // Body Battery
+    const bbRaw = row['Body Battery']
+    const bbNum = bbRaw && bbRaw !== '--' ? parseInt(bbRaw) : null
+
+    const rawBedtimeTab = row['Bedtime'] || null
+    const bedtimeTab = normalizeBedtime(rawBedtimeTab)
+
     const notesParts = []
     if (score && score !== '--') notesParts.push(`Sleep Score: ${score}`)
     if (row['Quality']) notesParts.push(`Quality: ${row['Quality']}`)
@@ -94,16 +104,38 @@ function parseTabular(content) {
       date: dateVal,
       sleep_hours: sleepHours,
       sleep_quality_1_5: quality,
+      sleep_score: score ? parseInt(score) : null,
       fatigue_1_5: null,
       soreness_1_5: null,
       pain_flag: 0,
       pain_notes: '',
       motivation_1_5: null,
+      resting_hr: rhr || null,
+      hrv: hrvNum,
+      body_battery: bbNum,
+      bedtime: bedtimeTab,
       notes: notesParts.join(' | '),
     })
   }
 
   return entries
+}
+
+function normalizeBedtime(raw) {
+  if (!raw || raw === '--') return null
+  if (/^\d{2}:\d{2}$/.test(raw)) return raw
+  const hms = raw.match(/^(\d{1,2}):(\d{2}):\d{2}$/)
+  if (hms) return `${String(parseInt(hms[1])).padStart(2, '0')}:${hms[2]}`
+  const ampm = raw.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
+  if (ampm) {
+    let h = parseInt(ampm[1])
+    const m = ampm[2]
+    const pm = ampm[3].toUpperCase() === 'PM'
+    if (pm && h < 12) h += 12
+    if (!pm && h === 12) h = 0
+    return `${String(h).padStart(2, '0')}:${m}`
+  }
+  return raw
 }
 
 // Parse the single-day key-value format
@@ -125,6 +157,14 @@ function parseKeyValue(content) {
   const sleepScore = data['Sleep Score'] ? parseInt(data['Sleep Score']) : null
   const quality = sleepScore != null && !isNaN(sleepScore) ? scoreToQuality(sleepScore) : null
 
+  const rhrKv = data['Resting Heart Rate'] ? parseInt(data['Resting Heart Rate']) : null
+  const hrvKv = data['Avg Overnight HRV'] ? parseInt(data['Avg Overnight HRV']) : null
+  const bbKv  = data['Body Battery'] ? parseInt(data['Body Battery']) : null
+
+  // Parse bedtime: check multiple possible keys in order, normalize to HH:MM
+  const rawBedtime = data['Bedtime'] || data['Bedtime Start'] || data['Start Time'] || data['Sleep Start'] || null
+  const bedt = normalizeBedtime(rawBedtime)
+
   const notesParts = []
   if (sleepScore) notesParts.push(`Sleep Score: ${sleepScore} (${data['Quality'] || ''})`)
   if (data['Deep Sleep Duration']) notesParts.push(`Deep: ${data['Deep Sleep Duration']}`)
@@ -135,11 +175,16 @@ function parseKeyValue(content) {
     date,
     sleep_hours: sleepHours,
     sleep_quality_1_5: quality,
+    sleep_score: sleepScore || null,
     fatigue_1_5: null,
     soreness_1_5: null,
     pain_flag: 0,
     pain_notes: '',
     motivation_1_5: null,
+    resting_hr: isNaN(rhrKv) ? null : rhrKv,
+    hrv: isNaN(hrvKv) ? null : hrvKv,
+    body_battery: isNaN(bbKv) ? null : bbKv,
+    bedtime: bedt,
     notes: notesParts.join(' | '),
   }]
 }

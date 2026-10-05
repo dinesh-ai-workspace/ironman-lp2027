@@ -28,7 +28,7 @@ const BIKE_RAMP_TABLE = {
   34: 300,  // 5.0 hr — specificity week (Build phase)
   35: 195,  // 3.25 hr — recovery week post-specificity
   36: 255,  // 4.25 hr — LP climbing specificity
-  37: 315,  // 5.25 hr — specificity week, final big exposure (Peak phase)
+  37: 300,  // 5.0 hr — specificity week, final big exposure (Peak phase); coach override from 315 for 14h cap
   38: 180,  // 3.0 hr — recovery week post-specificity
   39: 270,  // 4.5 hr — final race-specific stimulus
   41: 120,  // taper unwind
@@ -60,7 +60,10 @@ const RUN_RAMP_TABLE = {
   16: 120,
   20: 135,
   24: 150,
-  39: 150,
+  28: 155,
+  32: 160,
+  34: 165,
+  39: 165,
 };
 
 /**
@@ -165,7 +168,7 @@ function wouldExceedRunWeeklyCap(weekNum, currentWeeklyRunMiles, additionalMiles
  * @returns {boolean}
  */
 function wouldExceedLongRunCeiling(durationMin, distanceMi) {
-  return distanceMi > 16 || durationMin > 150;
+  return distanceMi > 16 || durationMin > 165;
 }
 
 /**

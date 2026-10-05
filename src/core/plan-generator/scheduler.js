@@ -14,7 +14,6 @@ const {
   getMaxLongBikeDuration,
   getMaxLongRunDuration,
   getRunCaps,
-  shouldIncludeBrick,
   shouldIncludeLPSpecificBikeWork,
   getLPBikeType,
   getSwimFocus,
@@ -25,10 +24,6 @@ const {
 /** Days of the week index: 0 = Monday, 6 = Sunday */
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-/**
- * Return a YYYY-MM-DD string for weekStartDate (Monday) + offsetDays.
- * Uses UTC arithmetic to avoid DST/local-timezone drift.
- */
 function dayDate(weekStartDate, offsetDays) {
   const d = new Date(Date.UTC(
     weekStartDate.getUTCFullYear(),
@@ -40,40 +35,24 @@ function dayDate(weekStartDate, offsetDays) {
   return d.toISOString().slice(0, 10);
 }
 
-/**
- * Round to nearest multiple of 5, minimum 5.
- */
 function roundTo5(n) {
   return Math.max(5, Math.round(n / 5) * 5);
 }
 
-/**
- * Apply step-back multiplier to duration, round to nearest 5.
- */
-function stepBackDuration(duration, isStepBack) {
+function stepBackDuration(duration, isStepBack, weekNum) {
   if (!isStepBack) return duration;
-  return roundTo5(duration * getStepBackMultiplier());
+  return roundTo5(duration * getStepBackMultiplier(weekNum));
 }
 
-/**
- * Estimate run distance from duration at easy pace (12 min/mile Z2).
- */
 function estimateRunDistance(durationMin) {
   return Math.round((durationMin / 12) * 10) / 10;
 }
 
-/**
- * Estimate swim distance from duration and phase (km).
- * Foundation: 1.5 km/hr base pace, gradually increasing.
- */
 function estimateSwimDistance(durationMin, weekNum) {
   const pace = weekNum <= 8 ? 1.5 : weekNum <= 20 ? 1.8 : weekNum <= 32 ? 2.0 : 2.2;
   return Math.round((durationMin / 60) * pace * 10) / 10;
 }
 
-/**
- * Build a session object with all required fields.
- */
 function makeSession(date, discipline, type, durationMin, distanceOrNull, zone, isBrick, purpose, importance, notes) {
   return {
     date,
@@ -90,21 +69,107 @@ function makeSession(date, discipline, type, durationMin, distanceOrNull, zone, 
   };
 }
 
+// Returns UTC day-of-week: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+function getDOW(dateStr) {
+  return new Date(dateStr + 'T00:00:00Z').getUTCDay();
+}
+
 /**
- * Schedule a single week of training.
- *
- * @param {Object} config
- * @param {number}  config.weekNum          1-indexed
- * @param {Date}    config.weekStartDate     Always a Monday
- * @param {string}  config.phase            e.g. 'foundation'
- * @param {Array}   config.phaseBlocks      from computePhaseBlocks
- * @param {boolean} config.isStepBack       true if step-back week
- * @param {boolean} config.hasTuneUpRace
- * @param {string|null} config.tuneUpRaceType  'sprint_olympic'|'half_ironman'|null
- * @param {Array}   config.templates        full template library
- * @param {Array}   config.allScheduledSessions  all sessions generated so far
- * @returns {Array} session objects for this week
+ * Enforce the 14-hour weekly cap.  Trim order: (a) remove strength, (b) cut
+ * Wed bike to 90 min, (c) cut Thu medium run to 50 min [A weeks only],
+ * (d) cut Tue easy run to 20 min.  KEY sessions and swims are never touched.
+ * For Wk 38 the dress-rehearsal sessions (race_simulation type) are excluded
+ * from the cap calculation.  If still over after (a)–(d), a violation is
+ * returned instead of silently passing.
  */
+const CAP_MIN = 840; // 14 h × 60
+
+function enforceWeeklyCap(weekNum, sessions, abType) {
+  function isDR(s) { return s.type === 'race_simulation'; }
+  function countable(slist) {
+    const list = weekNum === 38 ? slist.filter(s => !isDR(s)) : slist;
+    return list.reduce((acc, s) => acc + s.target_duration, 0);
+  }
+
+  if (countable(sessions) <= CAP_MIN) return { sessions, violations: [] };
+
+  let work = [...sessions];
+
+  // (a) remove strength
+  work = work.filter(s => s.discipline !== 'strength');
+  if (countable(work) <= CAP_MIN) return { sessions: work, violations: [] };
+
+  // (b) cut Wed bike (non-KEY) to 90 min
+  work = work.map(s =>
+    s.discipline === 'bike' && s.importance !== 'key' && getDOW(s.date) === 3
+      ? { ...s, target_duration: Math.min(s.target_duration, 90) }
+      : s
+  );
+  if (countable(work) <= CAP_MIN) return { sessions: work, violations: [] };
+
+  // (c) cut Thu medium run (non-KEY) to 50 min — A weeks only
+  if (abType === 'A') {
+    work = work.map(s =>
+      s.discipline === 'run' && s.importance !== 'key' && getDOW(s.date) === 4
+        ? { ...s, target_duration: Math.min(s.target_duration, 50) }
+        : s
+    );
+    if (countable(work) <= CAP_MIN) return { sessions: work, violations: [] };
+  }
+
+  // (d) cut Tue easy run (non-KEY) to 20 min
+  work = work.map(s =>
+    s.discipline === 'run' && s.importance !== 'key' && getDOW(s.date) === 2
+      ? { ...s, target_duration: Math.min(s.target_duration, 20) }
+      : s
+  );
+  if (countable(work) <= CAP_MIN) return { sessions: work, violations: [] };
+
+  const over = countable(work);
+  return {
+    sessions: work,
+    violations: [`Week ${weekNum}: ${(over / 60).toFixed(1)}h exceeds 14.0h cap after all permitted trims (a)–(d)`],
+  };
+}
+
+/**
+ * Returns 'A' | 'B' | 'cutback' | 'dress_rehearsal' | null for the A/B block (Wks 29-38).
+ * Cutback weeks = every-4th (32, 36). Week 38 = dress rehearsal.
+ * Odd non-cutback = A. Even non-cutback = B.
+ */
+function getABWeekType(weekNum) {
+  if (weekNum < 29 || weekNum > 38) return null;
+  if (weekNum === 38) return 'dress_rehearsal';
+  if (weekNum % 4 === 0) return 'cutback'; // 32, 36
+  return weekNum % 2 === 1 ? 'A' : 'B';   // odd=A, even=B
+}
+
+/**
+ * Long-run duration target for A/B weeks.
+ * A-weeks: Sunday long run. B-weeks: Thursday long run.
+ * Wk 34: coach override 150→135 min (cap compliance).
+ */
+const AB_LONG_RUN = {
+  29: 120, // A
+  30: 120, // B
+  31: 130, // A
+  33: 145, // A
+  34: 135, // B — coach override (was 150, trimmed for 14h cap)
+  35: 160, // A
+  37: 165, // A — peak
+};
+
+/**
+ * Brick-run duration for B-weeks (after Sat long ride).
+ * Wk 34: coach override 40→30 min (cap compliance).
+ */
+const B_BRICK_RUN = { 30: 30, 34: 30 };
+
+/**
+ * Saturday brick-run duration for Wks 21,23,25,27.
+ */
+const SAT_BRICK_WKS = { 21: 20, 23: 25, 25: 25, 27: 30 };
+
 function scheduleWeek(config) {
   const {
     weekNum,
@@ -118,57 +183,52 @@ function scheduleWeek(config) {
   } = config;
 
   const isTaper = isTaperWeek(weekNum, phaseBlocks);
-  const includeBrick = shouldIncludeBrick(weekNum);
+  const sbMult  = isStepBack ? getStepBackMultiplier(weekNum) : 1;
+  const swimFocus     = getSwimFocus(weekNum);
+  const swimDuration  = getSwimSessionDuration(weekNum);
+  const runCaps       = getRunCaps(weekNum);
+  const maxBike       = getMaxLongBikeDuration(weekNum);
   const includeLPBike = shouldIncludeLPSpecificBikeWork(weekNum);
-  const swimFocus = getSwimFocus(weekNum);
-  const swimDuration = getSwimSessionDuration(weekNum);
-  const runCaps = getRunCaps(weekNum);
-  const maxBike = getMaxLongBikeDuration(weekNum);
-  const sbMult = isStepBack ? getStepBackMultiplier() : 1;
 
   const sessions = [];
   let weeklyRunMiles = 0;
 
-  // ── Tune-up race week ────────────────────────────────────────────────────
+  // ── HIM tune-up race week ──────────────────────────────────────────────────
   if (hasTuneUpRace && tuneUpRaceType === 'half_ironman') {
-    // HIM race: lighter week, just a short swim Monday, easy jog Wednesday, race Saturday.
     const swimDur = roundTo5(40 * sbMult);
-    const swimDist = estimateSwimDistance(swimDur, weekNum);
     sessions.push(makeSession(dayDate(weekStartDate, 1), 'swim', 'technique', swimDur,
-      swimDist, 1, false, 'recovery', 'optional',
-      'Tune-up HIM race week — short pre-race shake-out swim. estimated_distance:true'));
+      estimateSwimDistance(swimDur, weekNum), 1, false, 'recovery', 'optional',
+      'HIM race week — pre-race shake-out swim. estimated_distance:true'));
     sessions.push(makeSession(dayDate(weekStartDate, 2), 'run', 'easy', 20,
       estimateRunDistance(20), 1, false, 'recovery', 'optional',
-      'Tune-up HIM race week — easy shake-out run. estimated_distance:true'));
-    // Race itself on Saturday
-    sessions.push(makeSession(dayDate(weekStartDate, 5), 'race', 'half_ironman_tune_up', 240,
-      null, 3, false, 'race', 'key', 'Tune-up Half-Ironman race — race effort'));
-    return sessions;
+      'HIM race week — easy shake-out run. estimated_distance:true'));
+    // HIM target duration 450 min (≈7:30 finish)
+    sessions.push(makeSession(dayDate(weekStartDate, 5), 'race', 'half_ironman_tune_up', 450,
+      null, 3, false, 'race', 'key', 'Tune-up Half-Ironman race — race effort. Collect all splits.'));
+    return { sessions, violations: [] };
   }
 
   if (hasTuneUpRace && tuneUpRaceType === 'sprint_olympic') {
     const swimDur = roundTo5(30 * sbMult);
-    const swimDist = estimateSwimDistance(swimDur, weekNum);
     sessions.push(makeSession(dayDate(weekStartDate, 1), 'swim', 'technique', swimDur,
-      swimDist, 1, false, 'recovery', 'optional',
-      'Tune-up race week — pre-race swim. estimated_distance:true'));
+      estimateSwimDistance(swimDur, weekNum), 1, false, 'recovery', 'optional',
+      'Race week — pre-race swim. estimated_distance:true'));
     sessions.push(makeSession(dayDate(weekStartDate, 4), 'run', 'easy', 20,
       estimateRunDistance(20), 1, false, 'recovery', 'optional',
-      'Tune-up race week — shake-out run. estimated_distance:true'));
+      'Race week — shake-out run. estimated_distance:true'));
     sessions.push(makeSession(dayDate(weekStartDate, 6), 'race', 'sprint_olympic_tune_up', 90,
       null, 3, false, 'race', 'key', 'Tune-up Sprint/Olympic race — race effort'));
-    return sessions;
+    return { sessions, violations: [] };
   }
 
-  // ── Taper week logic ─────────────────────────────────────────────────────
+  // ── Taper week logic ───────────────────────────────────────────────────────
   if (isTaper) {
     const taperBlock = phaseBlocks.find(b => b.phase === 'taper');
-    const weeksInTaper = taperBlock.weekEnd - taperBlock.weekStart + 1;
-    const taperWeekIndex = weekNum - taperBlock.weekStart; // 0-indexed within taper
+    const weeksInTaper    = taperBlock.weekEnd - taperBlock.weekStart + 1;
+    const taperWeekIndex  = weekNum - taperBlock.weekStart;
 
-    // Last taper week = race week
     if (taperWeekIndex === weeksInTaper - 1) {
-      // Race week: only pre-race shake-outs + race day (Sunday = index 6)
+      // Race week
       const swimDur = 20;
       sessions.push(makeSession(dayDate(weekStartDate, 1), 'swim', 'technique', swimDur,
         estimateSwimDistance(swimDur, weekNum), 1, false, 'race_prep', 'optional',
@@ -179,24 +239,21 @@ function scheduleWeek(config) {
       sessions.push(makeSession(dayDate(weekStartDate, 4), 'run', 'easy', 20,
         estimateRunDistance(20), 1, false, 'race_prep', 'optional',
         'Race week — short shake-out run. estimated_distance:true'));
-      // Race day: Sunday
-      sessions.push(makeSession(dayDate(weekStartDate, 6), 'race', 'ironman', 660,
+      // IM target duration 930 min (≈15:30 finish)
+      sessions.push(makeSession(dayDate(weekStartDate, 6), 'race', 'ironman', 930,
         null, 4, false, 'race', 'key', 'IRONMAN Lake Placid 2027 — race day'));
-      return sessions;
+      return { sessions, violations: [] };
     }
 
-    // Non-race taper weeks: explicit volumes.
-    // wk1=120min bike+run, wk2=90+90, wk3=60+60, then race week.
     const taperBikeDurations = [120, 90, 60];
     const taperRunDurations  = [120, 90, 60];
     const taperSwimFactors   = [0.75, 0.60, 0.45];
 
     const swimBase = Math.min(swimDuration.max, swimDuration.min + 10);
     const swFactor = taperSwimFactors[taperWeekIndex] != null ? taperSwimFactors[taperWeekIndex] : 0.45;
-    const swDur = roundTo5(swimBase * swFactor);
-    const swDist = estimateSwimDistance(swDur, weekNum);
+    const swDur    = roundTo5(swimBase * swFactor);
     sessions.push(makeSession(dayDate(weekStartDate, 1), 'swim', 'technique', swDur,
-      swDist, 2, false, 'race_prep', 'supporting',
+      estimateSwimDistance(swDur, weekNum), 2, false, 'race_prep', 'supporting',
       'Taper swim — maintain feel, reduce volume. estimated_distance:true'));
 
     const bikeDur = taperBikeDurations[taperWeekIndex] != null ? taperBikeDurations[taperWeekIndex] : 60;
@@ -209,7 +266,7 @@ function scheduleWeek(config) {
       estimateSwimDistance(swDur2, weekNum), 2, false, 'race_prep', 'optional',
       'Taper swim — second session. estimated_distance:true'));
 
-    const runDur = taperRunDurations[taperWeekIndex] != null ? taperRunDurations[taperWeekIndex] : 45;
+    const runDur  = taperRunDurations[taperWeekIndex] != null ? taperRunDurations[taperWeekIndex] : 45;
     const runDist = estimateRunDistance(runDur);
     if (!wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, runDist)) {
       weeklyRunMiles += runDist;
@@ -218,328 +275,393 @@ function scheduleWeek(config) {
         'Taper long run — Z2 durability, maintain feel. estimated_distance:true'));
     }
 
-    return sessions;
+    return { sessions, violations: [] };
+  }
+
+  // ── Week 5 special: FTP test + TT week ────────────────────────────────────
+  if (weekNum === 5) {
+    // Tue: swim (normal)
+    const swDurTue5 = roundTo5(swimDuration.min * sbMult);
+    sessions.push(makeSession(dayDate(weekStartDate, 1), 'swim', 'technique', swDurTue5,
+      estimateSwimDistance(swDurTue5, weekNum), 1, false, swimFocus, 'supporting',
+      'Week 5 test week — routine swim. estimated_distance:true'));
+
+    // Wed: FTP bike test 60min (KEY, replaces bike+strength)
+    sessions.push(makeSession(dayDate(weekStartDate, 2), 'bike', 'ftp_test', 60,
+      null, 4, false, 'testing', 'key',
+      'FTP test — 20-min all-out (×0.95 = FTP). Record watts in Benchmarks. Warm up 20 min, cool down 20 min.'));
+
+    // Thu: swim TT 40min (supporting) + run TT 60min (KEY)
+    sessions.push(makeSession(dayDate(weekStartDate, 3), 'swim', 'time_trial', 40,
+      estimateSwimDistance(40, weekNum), 2, false, 'testing', 'supporting',
+      '400m swim TT — record pace per 100m. Warm up, then continuous 400m effort, cool down.'));
+    sessions.push(makeSession(dayDate(weekStartDate, 3), 'run', 'time_trial', 60,
+      estimateRunDistance(60), 3, false, 'testing', 'key',
+      '30-min run TT — warm up 15 min, all-out 30 min, cool down 15 min. Record distance for Z2 pace calc.'));
+
+    // Fri: swim (technique, 40min, supporting) — restored
+    sessions.push(makeSession(dayDate(weekStartDate, 4), 'swim', 'technique', 40,
+      estimateSwimDistance(40, weekNum), 1, false, swimFocus, 'supporting',
+      'Week 5 test week — Fri technique swim. estimated_distance:true'));
+
+    // Sat: Z2 long ride (normal progression, not a test)
+    const satBikeDur5 = roundTo5(maxBike * sbMult);
+    sessions.push(makeSession(dayDate(weekStartDate, 5), 'bike', 'endurance_z2', satBikeDur5,
+      null, 2, false, 'aerobic_base', 'key',
+      'Test week — easy Z2 ride, no intensity. Let legs recover from Wed FTP test.'));
+
+    return enforceWeeklyCap(5, sessions, null);
+  }
+
+  // ── A/B block: Weeks 29-38 ─────────────────────────────────────────────────
+  const abType = getABWeekType(weekNum);
+
+  if (abType !== null) {
+    return scheduleABWeek(weekNum, weekStartDate, abType, phase, swimFocus, swimDuration, sbMult, maxBike);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // NORMAL WEEK SCHEDULING
-  // Typical layout:
-  //   Mon=REST, Tue=swim, Wed=bike+optional_strength, Thu=run,
-  //   Fri=swim+optional_strength, Sat=long_bike, Sun=long_run (or brick_run)
+  // NORMAL WEEK SCHEDULING (Wks 1-28, excluding tune-up races, taper, wk5)
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Tuesday: Swim (technique early, then aerobic intervals)
+  // Tuesday: Swim
   const swDurTue = roundTo5(
     (swimFocus === 'technique'
       ? swimDuration.min
       : (swimDuration.min + swimDuration.max) / 2) * sbMult
   );
   sessions.push(makeSession(
-    dayDate(weekStartDate, 1), // Tuesday
+    dayDate(weekStartDate, 1),
     'swim',
     swimFocus === 'technique' ? 'technique' : 'aerobic_intervals',
     swDurTue,
     estimateSwimDistance(swDurTue, weekNum),
     swimFocus === 'technique' ? 1 : 2,
-    false,
-    swimFocus,
-    'supporting',
+    false, swimFocus, 'supporting',
     `Swim focus: ${swimFocus}. estimated_distance:true`
   ));
 
-  // Wednesday: Bike (endurance or hill climbing)
-  const bikeType = includeLPBike ? getLPBikeType(weekNum) : (phase === 'foundation' ? 'technique_indoor' : 'endurance_z2');
+  // Tuesday: Easy run (Wk 15+ only, 30min Z2, supporting)
+  if (weekNum >= 15) {
+    const tueMedRunDur = roundTo5(30 * sbMult);
+    const tueMedRunDist = estimateRunDistance(tueMedRunDur);
+    if (!wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, tueMedRunDist)) {
+      weeklyRunMiles += tueMedRunDist;
+      sessions.push(makeSession(
+        dayDate(weekStartDate, 1),
+        'run', 'easy', tueMedRunDur, tueMedRunDist,
+        2, false, 'aerobic_base', 'supporting',
+        'Easy Z2 run after swim — keep effort conversational. estimated_distance:true'
+      ));
+    }
+  }
+
+  // Wednesday: Bike
+  const bikeType   = includeLPBike ? getLPBikeType(weekNum) : (phase === 'foundation' ? 'technique_indoor' : 'endurance_z2');
   const bikeBaseDur = phase === 'foundation' ? 75 : (weekNum <= 16 ? 90 : weekNum <= 24 ? 105 : 120);
-  const bikeDurWed = roundTo5(Math.min(bikeBaseDur * sbMult, getMaxLongBikeDuration(weekNum)));
+  const bikeDurWed  = roundTo5(Math.min(bikeBaseDur * sbMult, getMaxLongBikeDuration(weekNum)));
   sessions.push(makeSession(
-    dayDate(weekStartDate, 2), // Wednesday
-    'bike',
-    bikeType,
-    bikeDurWed,
-    null,
+    dayDate(weekStartDate, 2),
+    'bike', bikeType, bikeDurWed, null,
     includeLPBike ? 3 : 2,
-    false,
-    includeLPBike ? 'strength_endurance' : 'aerobic_base',
-    'supporting',
+    false, includeLPBike ? 'strength_endurance' : 'aerobic_base', 'supporting',
     weekNum >= 18 && weekNum <= 20 ? 'Tune-up race window this week — see race notes' : ''
   ));
 
-  // Wednesday: Strength — secondary to the bike, so optional
+  // Wednesday: Strength (optional in every week)
   if (!isStepBack) {
     const strType = phase === 'foundation' ? 'foundation_strength' : 'in_season_maintenance';
     sessions.push(makeSession(
       dayDate(weekStartDate, 2),
-      'strength',
-      strType,
+      'strength', strType,
       phase === 'foundation' ? 50 : 35,
-      null,
-      2,
-      false,
+      null, 2, false,
       phase === 'foundation' ? 'stability' : 'maintenance',
       'optional',
       'Same day as bike — do after aerobic session'
     ));
   }
 
-  // Thursday: Run (easy)
-  const runDurThu = roundTo5((phase === 'foundation' ? 35 : weekNum <= 20 ? 40 : 45) * sbMult);
-  const runDistThu = estimateRunDistance(runDurThu);
-  if (!wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, runDistThu)) {
-    weeklyRunMiles += runDistThu;
+  // Thursday: Long run (replaces easy run from current scheduler)
+  const { longRunCapMi, longRunCapMin } = runCaps;
+  let longRunDur  = roundTo5(Math.min(getMaxLongRunDuration(weekNum), longRunCapMin) * sbMult);
+  let longRunDist = estimateRunDistance(longRunDur);
+  if (wouldExceedLongRunCeiling(longRunDur, longRunDist)) {
+    longRunDur  = Math.min(longRunDur, longRunCapMin);
+    longRunDist = Math.min(longRunDist, longRunCapMi);
+  }
+  if (wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, longRunDist)) {
+    const remaining = (weekNum <= 8 ? 18 : 25) - weeklyRunMiles;
+    longRunDist = Math.max(0, remaining - 0.1);
+    longRunDur  = roundTo5(longRunDist * 12);
+  }
+  if (longRunDur > 0) {
+    weeklyRunMiles += longRunDist;
     sessions.push(makeSession(
-      dayDate(weekStartDate, 3), // Thursday
-      'run',
-      'easy',
-      runDurThu,
-      runDistThu,
-      2,
-      false,
-      'aerobic_base',
-      'supporting',
-      'Easy Z2 run. estimated_distance:true'
+      dayDate(weekStartDate, 3),
+      'run', 'long_run', longRunDur, longRunDist,
+      2, false, 'endurance', 'key',
+      'Long run — Z2 durability focus. estimated_distance:true'
     ));
   }
 
-  // Friday: Swim (aerobic or endurance)
-  const swDurFri = roundTo5(
-    ((swimDuration.min + swimDuration.max) / 2) * sbMult
-  );
+  // Thursday: 3rd swim (Wk 5+)
+  if (weekNum >= 5) {
+    const thuSwimDur = isStepBack ? 20 : roundTo5(phase === 'foundation' ? 25 : weekNum <= 20 ? 30 : 35);
+    const thuSwimType = swimFocus === 'technique' ? 'technique' : 'aerobic_intervals';
+    sessions.push(makeSession(
+      dayDate(weekStartDate, 3),
+      'swim', thuSwimType, thuSwimDur,
+      estimateSwimDistance(thuSwimDur, weekNum),
+      swimFocus === 'technique' ? 1 : 2,
+      false, swimFocus, 'supporting',
+      'Third swim — shorter, technique or aerobic focus. estimated_distance:true'
+    ));
+  }
+
+  // Friday: Swim
+  const friSwimType = weekNum >= 33 ? 'open_water' : (swimFocus === 'technique' ? 'technique' : (swimFocus === 'race_ready' ? 'endurance' : 'aerobic_intervals'));
+  const swDurFri = roundTo5(((swimDuration.min + swimDuration.max) / 2) * sbMult);
   sessions.push(makeSession(
-    dayDate(weekStartDate, 4), // Friday
-    'swim',
-    swimFocus === 'technique' ? 'technique' : (swimFocus === 'race_ready' ? 'endurance' : 'aerobic_intervals'),
-    swDurFri,
+    dayDate(weekStartDate, 4),
+    'swim', friSwimType, swDurFri,
     estimateSwimDistance(swDurFri, weekNum),
-    2,
-    false,
-    swimFocus,
-    'supporting',
-    `Second swim — ${swimFocus}. estimated_distance:true`
+    2, false, swimFocus, 'supporting',
+    weekNum >= 33
+      ? 'Open-water swim — OW technique, sighting drills. Pool continuous swim if water <60°F. estimated_distance:true'
+      : `Second swim — ${swimFocus}. estimated_distance:true`
   ));
 
-  // Friday: Strength — primary strength session of the week, supporting
+  // Friday: Strength (optional in every week)
   if (!isStepBack) {
-    const strType = phase === 'foundation' ? 'foundation_strength' : 'in_season_maintenance';
+    const strType       = phase === 'foundation' ? 'foundation_strength' : 'in_season_maintenance';
+    const strDur        = phase === 'foundation' ? 50 : 35;
     sessions.push(makeSession(
       dayDate(weekStartDate, 4),
-      'strength',
-      strType,
-      phase === 'foundation' ? 50 : 35,
-      null,
-      2,
-      false,
+      'strength', strType, strDur,
+      null, 2, false,
       phase === 'foundation' ? 'stability' : 'maintenance',
-      'supporting',
-      'Same day as swim — keep volume in check'
+      'optional',
+      'Strength session — keep volume in check'
     ));
   }
 
-  // Saturday: Long Bike — duration driven entirely by the ramp table.
-  const longBikeMax = getMaxLongBikeDuration(weekNum);
-
-  // Specificity weeks (34 & 37): the ramp table already encodes the elevated
-  // long-ride duration. These weeks reallocate swim/run volume toward bike —
-  // total weekly hours stay flat. No hardcoded override needed.
+  // Saturday: Long Bike
   const isSpecificityWeek  = SPECIFICITY_BIKE_WEEKS.includes(weekNum);
   const isBikeRecoveryWeek = BIKE_RECOVERY_WEEKS.includes(weekNum);
-
-  let longBikeDur = roundTo5(longBikeMax * sbMult);
-  // Safety buffer: new progression peaks at 315 min (wk37). Cap at 320 to prevent
-  // any interpolation rounding from accidentally exceeding the ramp ceiling.
+  let longBikeDur = roundTo5(maxBike * sbMult);
   longBikeDur = Math.min(longBikeDur, 320);
 
-  let satBikeType    = 'long_ride';
-  let satBikePurpose = isSpecificityWeek ? 'race_prep' : 'endurance';
-  let satBikeImportance = 'key';
+  let satBikeType      = 'long_ride';
+  let satBikePurpose   = isSpecificityWeek ? 'race_prep' : 'endurance';
   let satBikeNotes;
   if (isSpecificityWeek && weekNum === 37) {
-    satBikeNotes = 'Specificity week — final big exposure, race-day fueling rehearsal. Reallocate from swim/run this week, total hours stay flat.';
+    satBikeNotes = 'Specificity week — final big exposure, race-day fueling rehearsal. Fueling 70g carbs/hr.';
   } else if (isSpecificityWeek) {
-    satBikeNotes = 'Specificity week — reallocate swim/run toward bike this week, total hours stay flat. Full fueling protocol (60–80g carbs/hr).';
+    satBikeNotes = 'Specificity week — LP terrain simulation, full fueling protocol (60–80g carbs/hr).';
   } else if (isBikeRecoveryWeek) {
-    satBikeNotes = 'Recovery week after specificity block — keep effort easy, no heroics.';
+    satBikeNotes = 'Recovery week — keep effort easy.';
   } else {
     satBikeNotes = 'Long ride — fueling practice (60–70g carbs/hr)';
   }
 
-  // Tune-up race window notes
-  const himBlock = phaseBlocks.find(b => b.phase === 'build') || {};
-  const himWindowStart = himBlock.weekStart ? himBlock.weekStart + 2 : 30;
-  const himWindowEnd   = himBlock.weekStart ? himBlock.weekStart + 6 : 34;
-  if (weekNum >= himWindowStart && weekNum <= himWindowEnd) {
-    satBikeNotes += ' | Half-Ironman tune-up race window';
-  } else if (weekNum >= 16 && weekNum <= 20) {
-    satBikeNotes += ' | Sprint/Olympic tune-up race window (weeks 16-20)';
-  }
-
-  const satBikeDateStr = dayDate(weekStartDate, 5); // Saturday
-
   sessions.push(makeSession(
-    satBikeDateStr,
-    'bike',
-    satBikeType,
-    longBikeDur,
-    null,
-    2,
-    false,
-    satBikePurpose,
-    satBikeImportance,
-    satBikeNotes
+    dayDate(weekStartDate, 5),
+    'bike', satBikeType, longBikeDur, null,
+    2, false, satBikePurpose, 'key', satBikeNotes
   ));
 
-  // Sunday: Long Run or Brick Run
-  // The spec says "long bike and long run never on consecutive days."
-  // Sat long bike + Sun long run = consecutive days = NOT allowed by strict reading.
-  // Therefore: if we place the long ride on Saturday, place the long run on Thursday instead
-  // (but we already placed an easy run Thursday).
-  // Classic approach: keep long bike Saturday, move long run to FRIDAY or keep Sunday
-  // but with the understanding the spec means literally Sat→Sun is consecutive and violates.
-  //
-  // Resolution: Place long run on a day that is NOT consecutive with Saturday.
-  // Option: Long run on Thursday (swap Thu easy run for long run).
-  // This keeps them 2 days apart (Sat→Thu = not consecutive).
-  //
-  // We'll use: long ride Saturday, long run Thursday (replace easy run on Thu).
-  // Remove the easy Thursday run we added above and replace with long run.
-
-  // Remove the Thursday easy run if we added it
-  const thuIdx = sessions.findIndex(s => s.date === dayDate(weekStartDate, 3) && s.discipline === 'run');
-  if (thuIdx !== -1) {
-    sessions.splice(thuIdx, 1);
-    weeklyRunMiles -= runDistThu;
-  }
-
-  // Long run on Thursday — duration from ramp table, subject to caps.
-  const { longRunCapMi, longRunCapMin } = runCaps;
-  let longRunDur = roundTo5(Math.min(getMaxLongRunDuration(weekNum), longRunCapMin) * sbMult);
-  let longRunDist = estimateRunDistance(longRunDur);
-
-  // Enforce ceiling
-  if (wouldExceedLongRunCeiling(longRunDur, longRunDist)) {
-    longRunDur = Math.min(longRunDur, longRunCapMin);
-    longRunDist = Math.min(longRunDist, longRunCapMi);
-  }
-
-  // Enforce weekly cap
-  if (wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, longRunDist)) {
-    const remaining = (weekNum <= 8 ? 18 : 25) - weeklyRunMiles;
-    longRunDist = Math.max(0, remaining - 0.1);
-    longRunDur = roundTo5(longRunDist * 12);
-  }
-
-  if (longRunDur > 0) {
-    weeklyRunMiles += longRunDist;
-    const longRunSession = makeSession(
-      dayDate(weekStartDate, 3), // Thursday
-      'run',
-      'long_run',
-      longRunDur,
-      longRunDist,
-      2,
-      false,
-      'endurance',
-      'key',
-      'Long run — Z2 durability focus. estimated_distance:true'
-    );
-    sessions.push(longRunSession);
-  }
-
-  // Thursday: Swim — third guaranteed session of the week.
-  // Swim frequency (3x/week) is the non-negotiable target through Base and Build.
-  // Duration is kept shorter than Tue/Fri sessions to fit alongside the long run.
-  // Step-back weeks reduce duration but do not drop the session — frequency matters
-  // more than volume for a technique-limited discipline.
-  // If hours are tight on a given day, shorten the run not this swim.
-  const thuSwimDur = isStepBack
-    ? 20
-    : roundTo5(phase === 'foundation' ? 25 : weekNum <= 20 ? 30 : 35);
-  const thuSwimType = swimFocus === 'technique' ? 'technique' : 'aerobic_intervals';
-  sessions.push(makeSession(
-    dayDate(weekStartDate, 3), // Thursday
-    'swim',
-    thuSwimType,
-    thuSwimDur,
-    estimateSwimDistance(thuSwimDur, weekNum),
-    swimFocus === 'technique' ? 1 : 2,
-    false,
-    swimFocus,
-    'supporting',
-    'Third swim of the week — shorter, technique or aerobic focus. If time is short, reduce the run not this session. estimated_distance:true'
-  ));
-
-  // Sunday: Brick run (if applicable) or easy run
-  if (includeBrick && !isStepBack) {
-    const brickBikeDur = roundTo5(Math.min(getMaxLongBikeDuration(weekNum) * 0.75, 180));
-    // The brick bike is placed on Sunday, then the brick run immediately after (same day).
-    sessions.push(makeSession(
-      dayDate(weekStartDate, 6), // Sunday
-      'bike',
-      'endurance_z2',
-      brickBikeDur,
-      null,
-      2,
-      true,
-      'brick_transition',
-      'key',
-      'Brick bike — transition practice'
-    ));
-    const brickRunDur = roundTo5(25 + weekNum * 0.3);
-    const brickRunDist = estimateRunDistance(brickRunDur);
-    if (!wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, brickRunDist)) {
-      weeklyRunMiles += brickRunDist;
+  // Saturday: Brick run — Wks 21, 23, 25, 27
+  const satBrickDur = SAT_BRICK_WKS[weekNum];
+  if (satBrickDur != null && !isStepBack) {
+    const brickDist = estimateRunDistance(satBrickDur);
+    if (!wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, brickDist)) {
+      weeklyRunMiles += brickDist;
       sessions.push(makeSession(
-        dayDate(weekStartDate, 6),
-        'run',
-        'brick_run',
-        brickRunDur,
-        brickRunDist,
-        2,
-        true,
-        'brick_transition',
-        'key',
-        'Brick run off bike — T2 practice, Z2 effort. estimated_distance:true'
+        dayDate(weekStartDate, 5),
+        'run', 'brick_run', satBrickDur, brickDist,
+        2, true, 'brick_transition', 'key',
+        'Brick run off long ride — T2 practice, Z2 effort. estimated_distance:true'
       ));
     }
-  } else {
-    // Sunday easy recovery run
-    const recRunDur = roundTo5((phase === 'foundation' ? 30 : 35) * sbMult);
+  }
+
+  // Sunday: Easy recovery run (no brick on Sunday in new layout)
+  if (!isStepBack) {
+    const recRunDur  = roundTo5((phase === 'foundation' ? 30 : 35) * sbMult);
     const recRunDist = estimateRunDistance(recRunDur);
-    if (!wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, recRunDist) && !isStepBack) {
+    if (!wouldExceedRunWeeklyCap(weekNum, weeklyRunMiles, recRunDist)) {
       weeklyRunMiles += recRunDist;
       sessions.push(makeSession(
-        dayDate(weekStartDate, 6), // Sunday
-        'run',
-        'recovery',
-        recRunDur,
-        recRunDist,
-        1,
-        false,
-        'recovery',
-        'optional',
+        dayDate(weekStartDate, 6),
+        'run', 'recovery', recRunDur, recRunDist,
+        1, false, 'recovery', 'optional',
         'Easy recovery run, Sunday. estimated_distance:true'
       ));
     }
   }
 
-  // Verify long bike and long run are not on consecutive days.
-  // Long bike = Saturday (index 5). Long run = Thursday (index 3). That's 2 days apart — OK.
-  // But let's verify with the constraint function using already-scheduled sessions + new sessions.
-  // If any violation would occur, drop the long run (since it's the secondary session).
-  const allSoFar = [...allScheduledSessions, ...sessions];
-  const longBikeSession = sessions.find(s => s.discipline === 'bike' && s.type === 'long_ride' || (s.discipline === 'bike' && s.type === 'race_simulation'));
-  const longRunSession2 = sessions.find(s => s.discipline === 'run' && s.type === 'long_run');
-  if (longBikeSession && longRunSession2) {
-    if (wouldViolateLongSessionAdjacentRule(
-      allSoFar.filter(s => s !== longRunSession2),
-      longRunSession2
-    )) {
-      // Move long run 1 day earlier (Wednesday)
-      const origIdx = sessions.indexOf(longRunSession2);
-      sessions[origIdx] = { ...longRunSession2, date: dayDate(weekStartDate, 2) };
-    }
+  return enforceWeeklyCap(weekNum, sessions, null);
+}
+
+/**
+ * Schedule A/B block weeks (29-38).
+ */
+function scheduleABWeek(weekNum, weekStartDate, abType, phase, swimFocus, swimDuration, sbMult, maxBike) {
+  const sessions = [];
+  let weeklyRunMiles = 0;
+
+  // Swim durations (same for all AB weeks)
+  const swDurTue = roundTo5(((swimDuration.min + swimDuration.max) / 2) * sbMult);
+  const swDurThu = roundTo5(((swimDuration.min + swimDuration.max) / 2) * 0.8 * sbMult);
+  const swDurFri = roundTo5(((swimDuration.min + swimDuration.max) / 2) * sbMult);
+  const swimType = swimFocus === 'race_ready' ? 'endurance' : 'aerobic_intervals';
+
+  // Fri swim: open water from Wk 33
+  const friSwimType = weekNum >= 33 ? 'open_water' : swimType;
+
+  // Tuesday: Swim — Wks 33-35 use 100min endurance_continuous for IM readiness
+  if (weekNum >= 33 && weekNum <= 35) {
+    sessions.push(makeSession(dayDate(weekStartDate, 1), 'swim', 'endurance_continuous', 100,
+      estimateSwimDistance(100, weekNum), 2, false, swimFocus, 'supporting',
+      'Continuous swim — build toward 3,800m non-stop. Pool continuous swim if water <60°F. estimated_distance:true'));
+  } else {
+    sessions.push(makeSession(dayDate(weekStartDate, 1), 'swim', swimType, swDurTue,
+      estimateSwimDistance(swDurTue, weekNum), 2, false, swimFocus, 'supporting',
+      `Swim: ${swimFocus}. estimated_distance:true`));
   }
 
-  return sessions;
+  // Tuesday: Easy run 30min (supporting)
+  const tueMedRunDur = roundTo5(30 * sbMult);
+  const tueMedRunDist = estimateRunDistance(tueMedRunDur);
+  weeklyRunMiles += tueMedRunDist;
+  sessions.push(makeSession(dayDate(weekStartDate, 1), 'run', 'easy', tueMedRunDur, tueMedRunDist,
+    2, false, 'aerobic_base', 'supporting',
+    'Easy Z2 run after swim. estimated_distance:true'));
+
+  // Wednesday: Bike (LP-specific) + strength (optional)
+  const bikeType = getLPBikeType(weekNum);
+  const bikeDurWed = roundTo5(Math.min(120 * sbMult, maxBike * 0.55));
+  sessions.push(makeSession(dayDate(weekStartDate, 2), 'bike', bikeType, bikeDurWed, null,
+    3, false, 'strength_endurance', 'supporting', 'Midweek LP-specific bike'));
+  if (abType !== 'cutback') {
+    sessions.push(makeSession(dayDate(weekStartDate, 2), 'strength', 'in_season_maintenance', 35,
+      null, 2, false, 'maintenance', 'optional', 'Strength — after bike'));
+  }
+
+  // Thursday: depends on A/B/cutback
+  if (abType === 'dress_rehearsal') {
+    // DR week: easy run Thursday
+    sessions.push(makeSession(dayDate(weekStartDate, 3), 'run', 'easy', 30,
+      estimateRunDistance(30), 1, false, 'recovery', 'optional',
+      'Dress rehearsal week — easy shakeout. estimated_distance:true'));
+  } else if (abType === 'A') {
+    // A: medium run 60-70min (supporting)
+    const medRunDur  = roundTo5(65 * sbMult); // midpoint 60-70
+    const medRunDist = estimateRunDistance(medRunDur);
+    weeklyRunMiles  += medRunDist;
+    sessions.push(makeSession(dayDate(weekStartDate, 3), 'run', 'easy', medRunDur, medRunDist,
+      2, false, 'aerobic_base', 'supporting',
+      'Medium run — Z2 effort, steady pace. estimated_distance:true'));
+  } else if (abType === 'B') {
+    // B: long run (KEY)
+    const lrDur  = roundTo5((AB_LONG_RUN[weekNum] || 120) * sbMult);
+    const lrDist = estimateRunDistance(lrDur);
+    weeklyRunMiles += lrDist;
+    sessions.push(makeSession(dayDate(weekStartDate, 3), 'run', 'long_run', lrDur, lrDist,
+      2, false, 'endurance', 'key',
+      'Long run — Z2 durability. estimated_distance:true'));
+  } else {
+    // Cutback: moderate easy run
+    const cutRunDur  = roundTo5(50 * sbMult);
+    const cutRunDist = estimateRunDistance(cutRunDur);
+    weeklyRunMiles  += cutRunDist;
+    sessions.push(makeSession(dayDate(weekStartDate, 3), 'run', 'easy', cutRunDur, cutRunDist,
+      2, false, 'recovery', 'supporting',
+      'Cutback week — easy run, recovery priority. estimated_distance:true'));
+  }
+
+  // Thursday: swim (supporting) — always present
+  sessions.push(makeSession(dayDate(weekStartDate, 3), 'swim', swimType, swDurThu,
+    estimateSwimDistance(swDurThu, weekNum), 2, false, swimFocus, 'supporting',
+    'Third swim — aerobic focus. estimated_distance:true'));
+
+  // Friday: Swim (OW from Wk 33) + strength (optional)
+  sessions.push(makeSession(dayDate(weekStartDate, 4), 'swim', friSwimType, swDurFri,
+    estimateSwimDistance(swDurFri, weekNum), 2, false, swimFocus, 'supporting',
+    weekNum >= 33
+      ? 'Open-water swim — sighting, race-pace segments. Pool continuous swim if water <60°F. estimated_distance:true'
+      : `Swim — ${swimFocus}. estimated_distance:true`));
+  if (abType !== 'cutback') {
+    sessions.push(makeSession(dayDate(weekStartDate, 4), 'strength', 'in_season_maintenance', 35,
+      null, 2, false, 'maintenance', 'optional', 'Strength session'));
+  }
+
+  // Saturday: depends on abType
+  if (abType === 'dress_rehearsal') {
+    // Week 38: swim 100min → bike 300min → run 90min back-to-back
+    sessions.push(makeSession(dayDate(weekStartDate, 5), 'swim', 'race_simulation', 100,
+      estimateSwimDistance(100, weekNum), 3, false, 'race_prep', 'key',
+      'Dress rehearsal — segment 1: swim 100 min at IM race pace. Race gear, race nutrition.'));
+    sessions.push(makeSession(dayDate(weekStartDate, 5), 'bike', 'race_simulation', 300,
+      null, 3, true, 'race_prep', 'key',
+      'Dress rehearsal — segment 2: bike 300 min at IM race power (70–75% FTP). Full fueling.'));
+    sessions.push(makeSession(dayDate(weekStartDate, 5), 'run', 'race_simulation', 90,
+      estimateRunDistance(90), 3, true, 'race_prep', 'key',
+      'Dress rehearsal — segment 3: run 90 min off bike at IM pace. Log every mile split.'));
+  } else if (abType === 'B') {
+    // B: long ride (KEY) + brick run (KEY) — back-to-back
+    const bBikeDur  = roundTo5(maxBike * sbMult);
+    const bBrickDur = roundTo5((B_BRICK_RUN[weekNum] || 35) * sbMult);
+    sessions.push(makeSession(dayDate(weekStartDate, 5), 'bike', 'long_ride', bBikeDur, null,
+      2, false, 'endurance', 'key',
+      'Long ride — full fueling protocol (70g carbs/hr)'));
+    const brickDist = estimateRunDistance(bBrickDur);
+    weeklyRunMiles += brickDist;
+    sessions.push(makeSession(dayDate(weekStartDate, 5), 'run', 'brick_run', bBrickDur, brickDist,
+      2, true, 'brick_transition', 'key',
+      'Brick run off long ride — T2 practice, controlled Z2 effort. estimated_distance:true'));
+  } else {
+    // A or cutback: standard long ride
+    const aBikeDur = roundTo5(maxBike * sbMult);
+    sessions.push(makeSession(dayDate(weekStartDate, 5), 'bike', 'long_ride', aBikeDur, null,
+      2, false, 'endurance', 'key',
+      'Long ride — fueling practice (60–70g carbs/hr)'));
+  }
+
+  // Sunday: depends on abType
+  if (abType === 'dress_rehearsal') {
+    // Rest / easy walk — no session
+  } else if (abType === 'A') {
+    // A: long run (KEY) — intentional Sat→Sun back-to-back stimulus
+    const lrDur  = roundTo5((AB_LONG_RUN[weekNum] || 120) * sbMult);
+    const lrDist = estimateRunDistance(lrDur);
+    weeklyRunMiles += lrDist;
+    sessions.push(makeSession(dayDate(weekStartDate, 6), 'run', 'long_run', lrDur, lrDist,
+      2, false, 'endurance', 'key',
+      'Long run — fatigue-resistance stimulus after Sat long ride. Z2, no heroics. estimated_distance:true'));
+  } else if (abType === 'B') {
+    // B: easy 30min (optional)
+    const sunDur  = roundTo5(30 * sbMult);
+    const sunDist = estimateRunDistance(sunDur);
+    weeklyRunMiles += sunDist;
+    sessions.push(makeSession(dayDate(weekStartDate, 6), 'run', 'recovery', sunDur, sunDist,
+      1, false, 'recovery', 'optional',
+      'Recovery shake-out after B week. Easy walk/jog. estimated_distance:true'));
+  } else {
+    // Cutback: easy run (optional)
+    const sunDur  = roundTo5(30 * sbMult);
+    const sunDist = estimateRunDistance(sunDur);
+    weeklyRunMiles += sunDist;
+    sessions.push(makeSession(dayDate(weekStartDate, 6), 'run', 'easy', sunDur, sunDist,
+      1, false, 'recovery', 'optional',
+      'Cutback Sunday — easy recovery. estimated_distance:true'));
+  }
+
+  return enforceWeeklyCap(weekNum, sessions, abType);
 }
+
+// Expose AB_LONG_RUN so tests can inspect it
+scheduleWeek.getABWeekType = getABWeekType;
 
 module.exports = { scheduleWeek };

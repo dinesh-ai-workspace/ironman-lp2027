@@ -1,5 +1,6 @@
 'use strict'
 import React, { useState, useEffect } from 'react'
+import { sessionCredit, IMP_W } from '../../core/scoring'
 
 const DISC_COLOR = {
   swim: 'var(--swim)',
@@ -136,16 +137,6 @@ function formatShortDate(isoStr) {
 
 // ─── Compliance engine ────────────────────────────────────────────────────────
 
-// Weights: KEY = 10, Supporting = 4, Optional = 1
-const W = { key: 10, supporting: 4, optional: 1 }
-
-// Strict thresholds: done ≥85%, partial 50–84% (25% credit), <50% = 0
-function sessionCredit(pct) {
-  if (pct >= 0.85) return 1.0
-  if (pct >= 0.50) return 0.25
-  return 0
-}
-
 function letterGrade(score) {
   if (score >= 90) return 'A'
   if (score >= 75) return 'B'
@@ -182,15 +173,16 @@ function computeWeekCompliance(days, todayISO) {
 
   // ── Step 2: week-wide greedy matching ──────────────────────────────────────
 
-  // A log on day D with a same-discipline plan on D-1 defers to cross-day passes
+  // A log on day D with a same-discipline plan on D-1 defers to cross-day passes —
+  // UNLESS day D also has its own same-discipline plan (e.g. back-to-back bike days).
   const hasEarlierPlan = new Set()
   for (const l of pastLogged) {
     const prev = new Date(l.dateStr + 'T00:00:00Z')
     prev.setUTCDate(prev.getUTCDate() - 1)
     const prevStr = prev.toISOString().slice(0, 10)
-    if (pastPlanned.some(p => p.discipline === l.discipline && p.dateStr === prevStr)) {
-      hasEarlierPlan.add(l.id)
-    }
+    const hasPrevPlan = pastPlanned.some(p => p.discipline === l.discipline && p.dateStr === prevStr)
+    const hasOwnPlan  = pastPlanned.some(p => p.discipline === l.discipline && p.dateStr === l.dateStr)
+    if (hasPrevPlan && !hasOwnPlan) hasEarlierPlan.add(l.id)
   }
 
   function daysDiff(a, b) {
@@ -283,6 +275,9 @@ function computeWeekCompliance(days, todayISO) {
     if (matched) {
       pct    = matched.duration / p.target_duration
       status = pct >= 0.85 ? 'done' : pct >= 0.50 ? 'partial' : 'low'
+    } else if (p.dateStr === todayISO) {
+      // Day isn't over — unmatched today's plans are still pending, not missed
+      status = 'pending'
     }
     matchedRows.push({ dateStr: p.dateStr, date: p.date, planned: p, matched, status, pct })
   }
@@ -316,7 +311,7 @@ function computeWeekCompliance(days, todayISO) {
 
   for (const r of matchedRows) {
     if (!r.planned) continue
-    const w = W[r.planned.importance] || 1
+    const w = IMP_W[r.planned.importance] || 1
 
     if (r.status === 'pending') {
       pendingPts += w
@@ -327,7 +322,7 @@ function computeWeekCompliance(days, todayISO) {
     }
 
     maxPts += w
-    const credit = sessionCredit(r.pct ?? 0)
+    const credit = sessionCredit(r.pct ?? 0, r.planned?.discipline)
     earned += w * credit
     const full = credit >= 1.0
     if (r.planned.importance === 'key')       { keyTotal++; if (full) keyDone++ }
@@ -339,10 +334,21 @@ function computeWeekCompliance(days, todayISO) {
   const grade = score !== null ? letterGrade(score) : null
   const color = score !== null ? gradeColor(score) : 'var(--text-muted)'
 
+  // Per-discipline planned vs logged minutes (past/today only, excludes pending)
+  const discCoverage = {}
+  for (const r of matchedRows) {
+    if (!r.planned || r.status === 'pending') continue
+    const disc = r.planned.discipline
+    if (!discCoverage[disc]) discCoverage[disc] = { planned: 0, logged: 0 }
+    discCoverage[disc].planned += r.planned.target_duration || 0
+    discCoverage[disc].logged  += r.matched?.duration || 0
+  }
+
   return {
     rows: matchedRows, score, grade, color,
     earned, maxPts, pendingPts, hasPending: pendingPts > 0,
     keyDone, keyTotal, supDone, supTotal, optDone, optTotal,
+    discCoverage,
   }
 }
 
@@ -552,6 +558,34 @@ export default function Calendar() {
                 </div>
               </div>
 
+              {/* Discipline coverage summary */}
+              {Object.keys(compliance.discCoverage || {}).length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '10px 0 4px' }}>
+                  {Object.entries(compliance.discCoverage).map(([disc, { planned, logged }]) => {
+                    const pct = planned > 0 ? logged / planned : 1
+                    const warn = pct < 0.75
+                    const pctLabel = planned > 0 ? `${Math.round(pct * 100)}%` : '—'
+                    return (
+                      <div key={disc} style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        padding: '5px 10px', borderRadius: '6px',
+                        background: warn ? 'rgba(251,146,60,0.08)' : 'rgba(148,163,184,0.06)',
+                        border: `1px solid ${warn ? 'rgba(251,146,60,0.3)' : 'var(--border)'}`,
+                        fontSize: '12px',
+                      }}>
+                        <span style={{ fontWeight: 600, color: DISC_COLOR[disc] || 'var(--text-primary)' }}>
+                          {DISC_LABEL[disc] || disc}
+                        </span>
+                        <span style={{ color: 'var(--text-muted)' }}>{logged}m / {planned}m</span>
+                        <span style={{ fontWeight: 600, color: warn ? 'var(--accent-amber)' : 'var(--accent-green)' }}>
+                          {pctLabel}{warn ? ' ⚠' : ''}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
               {/* Session table with expandable rows */}
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                 <thead>
@@ -611,11 +645,14 @@ export default function Calendar() {
                     const plannedMin = r.planned?.target_duration ?? null
                     const loggedMin  = r.matched?.duration ?? null
                     const gap = (!isPending && plannedMin !== null && loggedMin !== null) ? loggedMin - plannedMin : null
+                    const isOver = r.pct > 1.30
                     const gapLabel = isPending ? '—'
                       : gap === null ? (r.status === 'missed' || r.status === 'low') ? `-${plannedMin}m` : '—'
-                      : gap === 0 ? 'On target' : gap > 0 ? `+${gap}m` : `${gap}m`
+                      : gap === 0 ? 'On target'
+                      : gap > 0 ? `+${gap}m${isOver ? ' ⚠' : ''}` : `${gap}m`
                     const gapColor = isPending ? 'var(--text-muted)'
                       : gap === null ? (r.status === 'missed' ? '#ef4444' : r.status === 'low' ? '#fb923c' : 'var(--text-muted)')
+                      : isOver ? 'var(--accent-amber)'
                       : gap >= 0 ? 'var(--accent-green)'
                       : gap >= -plannedMin * 0.15 ? 'var(--accent-amber)' : '#ef4444'
                     const discColor = DISC_COLOR[r.planned?.discipline || r.matched?.discipline] || 'var(--text-muted)'

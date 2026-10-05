@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Plan
   generateAndSavePlan: (config) => ipcRenderer.invoke('plan:generate', config),
   getPlan: () => ipcRenderer.invoke('plan:get'),
+  regeneratePlan: () => ipcRenderer.invoke('plan:regenerate'),
   getPlannedSessions: (filters) => ipcRenderer.invoke('sessions:planned:list', filters),
 
   // Logging
@@ -61,4 +62,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   stopLossCheckinSave: (entry) => ipcRenderer.invoke('stoploss:checkin:save', entry),
   stopLossWeeklyCheck: (weekStartDate) => ipcRenderer.invoke('stoploss:weekly-check', weekStartDate),
   stopLossHistory: (weeks) => ipcRenderer.invoke('stoploss:history', weeks),
+
+  // Sync to Drive / Snapshot
+  syncToDrive: () => ipcRenderer.invoke('snapshot:sync'),
+  generateSnapshot: () => ipcRenderer.invoke('snapshot:generate'),
+  getSyncState: () => ipcRenderer.invoke('sync:get-state'),
+  saveBenchmark: (entry) => ipcRenderer.invoke('benchmark:save', entry),
+  getBenchmarks: () => ipcRenderer.invoke('benchmark:list'),
 })

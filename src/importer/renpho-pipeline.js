@@ -8,12 +8,16 @@ const { randomUUID } = require('crypto')
  */
 function parseRenphoDate(raw) {
   const trimmed = (raw || '').trim()
-  const m = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/)
-  if (!m) return null
-  const year = parseInt(m[3]) + 2000
-  const month = m[1].padStart(2, '0')
-  const day   = m[2].padStart(2, '0')
-  return `${year}-${month}-${day}`
+  // Old format: M/D/YY  e.g. 10/2/26
+  const m1 = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/)
+  if (m1) {
+    const year = parseInt(m1[3]) + 2000
+    return `${year}-${m1[1].padStart(2, '0')}-${m1[2].padStart(2, '0')}`
+  }
+  // New format: YYYY.MM.DD  e.g. 2026.10.02
+  const m2 = trimmed.match(/^(\d{4})\.(\d{2})\.(\d{2})$/)
+  if (m2) return `${m2[1]}-${m2[2]}-${m2[3]}`
+  return null
 }
 
 /**
@@ -79,15 +83,15 @@ function normalizeRenphoRow(raw) {
     time:                 timeRaw || null,
     weight_lb:            weight,
     bmi:                  parseNum(raw['BMI'], false),
-    body_fat_pct:         parseNum(raw['Body Fat(%)'], false),
-    skeletal_muscle_pct:  parseNum(raw['Skeletal Muscle(%)'], false),
+    body_fat_pct:         parseNum(raw['Body Fat Percentage(%)'] ?? raw['Body Fat(%)'], false),
+    skeletal_muscle_pct:  parseNum(raw['Skeletal Muscle Percentage(%)'] ?? raw['Skeletal Muscle(%)'], false),
     fat_free_mass_lb:     parseNum(raw['Fat-Free Mass(lb)'], false),
     subcutaneous_fat_pct: parseNum(raw['Subcutaneous Fat(%)'], false),
     visceral_fat:         parseNum(raw['Visceral Fat'], false),
-    body_water_pct:       parseNum(raw['Body Water(%)'], false),
+    body_water_pct:       parseNum(raw['Body Water Percentage(%)'] ?? raw['Body Water(%)'], false),
     muscle_mass_lb:       parseNum(raw['Muscle Mass(lb)'], false),
     bone_mass_lb:         parseNum(raw['Bone Mass(lb)'], false),
-    protein_pct:          parseNum(raw['Protein (%)'], false),
+    protein_pct:          parseNum(raw['Protein Percentage(%)'] ?? raw['Protein (%)'], false),
     bmr_kcal:             parseNum(raw['BMR(kcal)'], true),
     metabolic_age:        parseNum(raw['Metabolic Age'], true),
   }

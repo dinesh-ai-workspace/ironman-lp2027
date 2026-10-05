@@ -6,9 +6,11 @@ const fs = require('fs')
 
 // ─── Database setup ────────────────────────────────────────────────────────
 const isDev = process.env.NODE_ENV !== 'production'
+const { resolveAndVerifyDbPath } = require('../src/db/resolve-path')
+const { computeScore: computeScoreV2 } = require('../src/core/scoring')
 
 function getDbPath() {
-  return path.join(__dirname, '../data/ironman.db')
+  return resolveAndVerifyDbPath()
 }
 
 // Ensure data directory exists in dev
@@ -59,6 +61,57 @@ function runMigrations() {
   if (!dwCols.includes('hunger')) {
     db.prepare('ALTER TABLE daily_wellness ADD COLUMN hunger TEXT').run()
   }
+  if (!dwCols.includes('bedtime'))    db.prepare('ALTER TABLE daily_wellness ADD COLUMN bedtime TEXT').run()
+  if (!dwCols.includes('resting_hr')) db.prepare('ALTER TABLE daily_wellness ADD COLUMN resting_hr INTEGER').run()
+  if (!dwCols.includes('hrv'))        db.prepare('ALTER TABLE daily_wellness ADD COLUMN hrv INTEGER').run()
+  if (!dwCols.includes('stress_1_5')) db.prepare('ALTER TABLE daily_wellness ADD COLUMN stress_1_5 INTEGER').run()
+  if (!dwCols.includes('body_battery')) db.prepare('ALTER TABLE daily_wellness ADD COLUMN body_battery INTEGER').run()
+
+  // sleep_score backfill
+  if (!dwCols.includes('sleep_score')) db.prepare('ALTER TABLE daily_wellness ADD COLUMN sleep_score INTEGER').run()
+
+  // Backfill sleep_score from notes
+  const ssRows = db.prepare("SELECT id, notes, sleep_score FROM daily_wellness WHERE notes IS NOT NULL AND notes != '' AND sleep_score IS NULL").all()
+  for (const row of ssRows) {
+    const m = row.notes.match(/Sleep Score:\s*(\d{1,3})\b/i)
+    if (m) db.prepare('UPDATE daily_wellness SET sleep_score = ? WHERE id = ?').run(parseInt(m[1]), row.id)
+  }
+
+  // Backfill resting_hr, hrv, body_battery from notes for existing rows
+  const noteRows = db.prepare("SELECT id, notes, resting_hr, hrv, body_battery FROM daily_wellness WHERE notes IS NOT NULL AND notes != ''").all()
+  for (const row of noteRows) {
+    const updates = {}
+    if (row.resting_hr == null) {
+      const m = row.notes.match(/RHR:\s*(\d{1,3})\b/i)
+      if (m) updates.resting_hr = parseInt(m[1])
+    }
+    if (row.hrv == null) {
+      const m = row.notes.match(/HRV:\s*(\d{1,3})\b/i)
+      if (m) updates.hrv = parseInt(m[1])
+    }
+    if (row.body_battery == null) {
+      const m = row.notes.match(/Body Battery:\s*(\d{1,3})\b/i)
+      if (m) updates.body_battery = parseInt(m[1])
+    }
+    if (Object.keys(updates).length > 0) {
+      const sets = Object.keys(updates).map(k => `${k} = ?`).join(', ')
+      db.prepare(`UPDATE daily_wellness SET ${sets} WHERE id = ?`).run(...Object.values(updates), row.id)
+    }
+  }
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS athlete_benchmarks (
+      id      INTEGER PRIMARY KEY AUTOINCREMENT,
+      metric  TEXT NOT NULL,
+      value   REAL NOT NULL,
+      unit    TEXT NOT NULL DEFAULT '',
+      date    TEXT NOT NULL,
+      method  TEXT NOT NULL DEFAULT 'test',
+      notes   TEXT NOT NULL DEFAULT '',
+      UNIQUE(metric, date)
+    )
+  `).run()
+
   db.prepare(`
     CREATE TABLE IF NOT EXISTS weekly_fat_loss_checkins (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,6 +191,7 @@ function initializePlan() {
 
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  console.log('[main] DB path:', dbPath)
   db = getDb(dbPath)
   runMigrations()
   initializePlan()
@@ -208,6 +262,21 @@ ipcMain.handle('plan:get', () => {
   return db.prepare(
     "SELECT * FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1"
   ).get() || null
+})
+
+// ─── IPC: plan:regenerate ────────────────────────────────────────────────
+ipcMain.handle('plan:regenerate', () => {
+  try {
+    db.prepare("UPDATE plans SET status='superseded' WHERE status='active'").run()
+    const planStartDate    = new Date('2026-09-14T00:00:00Z')
+    const athleteBirthDate = new Date('1980-01-15T00:00:00Z')
+    const raceDate         = new Date('2027-07-25T00:00:00Z')
+    const generated = generatePlan({ raceDate, planStartDate, athleteBirthDate })
+    const { planId, version } = savePlan(db, generated)
+    return { ok: true, planId, version }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
 })
 
 // ─── IPC: plan:generate ───────────────────────────────────────────────────
@@ -305,6 +374,8 @@ ipcMain.handle('sessions:log', (event, session) => {
     import_batch_id: session.import_batch_id || null,
   })
 
+  // Background sync after session log
+  try { require('./snapshot-sync').runSync(db) } catch (_) {}
   return { id: result.lastInsertRowid }
 })
 
@@ -354,10 +425,12 @@ ipcMain.handle('wellness:save', (event, entry) => {
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO daily_wellness
       (date, sleep_hours, sleep_quality_1_5, fatigue_1_5, soreness_1_5,
-       pain_flag, pain_notes, motivation_1_5, notes, body_weight_lb, hunger)
+       pain_flag, pain_notes, motivation_1_5, notes, body_weight_lb, hunger,
+       bedtime, resting_hr, hrv, stress_1_5, body_battery, sleep_score)
     VALUES
       (@date, @sleep_hours, @sleep_quality_1_5, @fatigue_1_5, @soreness_1_5,
-       @pain_flag, @pain_notes, @motivation_1_5, @notes, @body_weight_lb, @hunger)
+       @pain_flag, @pain_notes, @motivation_1_5, @notes, @body_weight_lb, @hunger,
+       @bedtime, @resting_hr, @hrv, @stress_1_5, @body_battery, @sleep_score)
   `)
   const result = stmt.run({
     date: entry.date,
@@ -371,7 +444,15 @@ ipcMain.handle('wellness:save', (event, entry) => {
     notes: entry.notes || '',
     body_weight_lb: entry.body_weight_lb !== undefined ? entry.body_weight_lb : null,
     hunger: entry.hunger || null,
+    bedtime: entry.bedtime || null,
+    resting_hr: entry.resting_hr !== undefined ? entry.resting_hr : null,
+    hrv: entry.hrv !== undefined ? entry.hrv : null,
+    stress_1_5: entry.stress_1_5 !== undefined ? entry.stress_1_5 : null,
+    body_battery: entry.body_battery !== undefined ? entry.body_battery : null,
+    sleep_score: entry.sleep_score !== undefined ? entry.sleep_score : null,
   })
+  // Background sync after wellness save
+  try { require('./snapshot-sync').runSync(db) } catch (_) {}
   return { id: result.lastInsertRowid }
 })
 
@@ -772,10 +853,9 @@ ipcMain.handle('stats:upcoming', (event, days) => {
 // ─── IPC: stats:readiness ─────────────────────────────────────────────────
 ipcMain.handle('stats:readiness', () => {
   const PLAN_START = new Date('2026-09-14T00:00:00Z')
-  const now = new Date()
-  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-  const todayStr = todayUTC.toISOString().slice(0, 10)
-  const currentWeek = Math.max(1, Math.floor((todayUTC - PLAN_START) / (7 * 24 * 60 * 60 * 1000)) + 1)
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
+  const todayDate = new Date(todayStr + 'T00:00:00Z')
+  const currentWeek = Math.max(1, Math.floor((todayDate - PLAN_START) / (7 * 24 * 60 * 60 * 1000)) + 1)
 
   const CHECKPOINTS = [8, 16, 24, 28, 32, 36]
   const isAtCheckpoint = CHECKPOINTS.includes(currentWeek)
@@ -1124,133 +1204,12 @@ ipcMain.handle('readiness:overrides:clear', (event, gate) => {
 ipcMain.handle('stats:heatmap', () => {
   const PLAN_START = new Date('2026-09-14T00:00:00Z')
   const TOTAL_WEEKS = 45
-  const now = new Date()
-  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-  const todayStr = todayUTC.toISOString().slice(0, 10)
-  const currentWeek = Math.max(1, Math.floor((todayUTC - PLAN_START) / (7 * 24 * 60 * 60 * 1000)) + 1)
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
+  const todayDate = new Date(todayStr + 'T00:00:00Z')
+  const currentWeek = Math.max(1, Math.floor((todayDate - PLAN_START) / (7 * 24 * 60 * 60 * 1000)) + 1)
 
   const activePlan = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
   const planId = activePlan?.id || -1
-
-  // Same weights as frontend Calendar compliance
-  const IMP_W = { key: 10, supporting: 4, optional: 1 }
-
-  function sessionCredit(pct) {
-    if (pct >= 0.85) return 1.0
-    if (pct >= 0.50) return 0.25
-    return 0
-  }
-
-  function computeScore(plannedRows, loggedRows, cutoffDate) {
-    const past = plannedRows.filter(p => p.date <= cutoffDate)
-    if (past.length === 0) return null
-
-    const impOrder = { key: 0, supporting: 1, optional: 2 }
-
-    // A log on day D with a same-discipline plan on D-1 defers to cross-day passes
-    const hasEarlierPlan = new Set()
-    for (const l of loggedRows) {
-      const prev = new Date(l.date + 'T00:00:00Z')
-      prev.setUTCDate(prev.getUTCDate() - 1)
-      const prevStr = prev.toISOString().slice(0, 10)
-      if (past.some(p => p.discipline === l.discipline && p.date === prevStr)) {
-        hasEarlierPlan.add(l.id)
-      }
-    }
-
-    function daysDiff(a, b) {
-      return Math.abs((new Date(a + 'T00:00:00Z') - new Date(b + 'T00:00:00Z')) / 86400000)
-    }
-
-    function pickBest(plan, candidates, crossDay = false) {
-      return candidates.reduce((best, l) => {
-        const dd = Math.abs(l.duration - plan.target_duration)
-        const bd = Math.abs(best.duration - plan.target_duration)
-        if (dd !== bd) return dd < bd ? l : best
-        if (crossDay) {
-          const dDist = daysDiff(l.date, plan.date)
-          const bDist = daysDiff(best.date, plan.date)
-          if (dDist !== bDist) return dDist < bDist ? l : best
-        }
-        if (l.date !== best.date) return l.date < best.date ? l : best
-        return l.id <= best.id ? l : best
-      })
-    }
-
-    const usedIds = new Set()
-    const matchMap = new Map()
-
-    // Pass 1: same-day, importance-first
-    const sortedByImp = [...past].sort((a, b) => {
-      const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
-      if (di !== 0) return di
-      if (a.date !== b.date) return a.date.localeCompare(b.date)
-      return b.target_duration - a.target_duration
-    })
-
-    for (const p of sortedByImp) {
-      const candidates = loggedRows.filter(l =>
-        l.discipline === p.discipline && !usedIds.has(l.id)
-          && l.date === p.date && !hasEarlierPlan.has(l.id)
-      )
-      if (candidates.length > 0) {
-        const best = pickBest(p, candidates)
-        usedIds.add(best.id)
-        matchMap.set(p, best)
-      }
-    }
-
-    // Pass 2: cross-day, KEY only, ±2 days
-    const keyPlans = past
-      .filter(p => p.importance === 'key' && !matchMap.has(p))
-      .sort((a, b) => a.date.localeCompare(b.date))
-
-    for (const p of keyPlans) {
-      const candidates = loggedRows.filter(l =>
-        l.discipline === p.discipline && !usedIds.has(l.id)
-          && daysDiff(l.date, p.date) <= 2
-      )
-      if (candidates.length > 0) {
-        const best = pickBest(p, candidates, true)
-        usedIds.add(best.id)
-        matchMap.set(p, best)
-      }
-    }
-
-    // Pass 3: cross-day, supporting + optional, date-first, ±2 days
-    const nonKeyPlans = past
-      .filter(p => p.importance !== 'key' && !matchMap.has(p))
-      .sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date)
-        const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
-        if (di !== 0) return di
-        return b.target_duration - a.target_duration
-      })
-
-    for (const p of nonKeyPlans) {
-      const candidates = loggedRows.filter(l =>
-        l.discipline === p.discipline && !usedIds.has(l.id)
-          && daysDiff(l.date, p.date) <= 2
-      )
-      if (candidates.length > 0) {
-        const best = pickBest(p, candidates, true)
-        usedIds.add(best.id)
-        matchMap.set(p, best)
-      }
-    }
-
-    let earned = 0, maxPts = 0
-    for (const p of past) {
-      const w = IMP_W[p.importance] || 1
-      maxPts += w
-      const matched = matchMap.get(p)
-      if (matched) {
-        earned += w * sessionCredit(matched.duration / p.target_duration)
-      }
-    }
-
-    return maxPts > 0 ? Math.round(earned / maxPts * 100) : null
-  }
 
   const weeks = []
   for (let wk = 1; wk <= TOTAL_WEEKS; wk++) {
@@ -1273,7 +1232,8 @@ ipcMain.handle('stats:heatmap', () => {
     const isFuture  = wk > currentWeek
     const isCurrent = wk === currentWeek
 
-    const score = isFuture ? null : computeScore(plannedRows, loggedRows, todayStr)
+    const scoreResult = isFuture ? null : computeScoreV2(plannedRows, loggedRows, todayStr)
+    const score = scoreResult?.score ?? null
 
     weeks.push({
       weekNum: wk, startStr, endStr,
@@ -1305,9 +1265,10 @@ ipcMain.handle('stats:progress', () => {
     "SELECT * FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1"
   ).get()
 
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
+
   let currentPhase = null
   if (activePlan) {
-    const today = new Date().toISOString().slice(0, 10)
     const block = db.prepare(`
       SELECT phase, phase_name FROM plan_blocks
       WHERE plan_id = ? AND start_date <= ? AND end_date >= ?
@@ -1317,10 +1278,10 @@ ipcMain.handle('stats:progress', () => {
   }
 
   // Completed vs planned for last 4 weeks
-  const fourWeeksAgo = new Date()
+  const todayDateP = new Date(today + 'T00:00:00Z')
+  const fourWeeksAgo = new Date(todayDateP)
   fourWeeksAgo.setUTCDate(fourWeeksAgo.getUTCDate() - 28)
   const fourWeeksAgoStr = fourWeeksAgo.toISOString().slice(0, 10)
-  const today = new Date().toISOString().slice(0, 10)
 
   const plannedCount = db.prepare(`
     SELECT COUNT(*) AS cnt FROM planned_sessions
@@ -1346,12 +1307,11 @@ ipcMain.handle('stats:progress', () => {
 
 // ─── IPC: stats:readiness-score ──────────────────────────────────────────
 ipcMain.handle('stats:readiness-score', () => {
-  const _now = new Date()
-  const _nowUTC = new Date(Date.UTC(_now.getUTCFullYear(), _now.getUTCMonth(), _now.getUTCDate()))
-  const today = _nowUTC.toISOString().slice(0, 10)
-  const _yd = new Date(_nowUTC); _yd.setUTCDate(_yd.getUTCDate() - 1)
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
+  const todayDate = new Date(today + 'T00:00:00Z')
+  const _yd = new Date(todayDate); _yd.setUTCDate(_yd.getUTCDate() - 1)
   const yesterday = _yd.toISOString().slice(0, 10)
-  const _28d = new Date(_nowUTC); _28d.setUTCDate(_28d.getUTCDate() - 28)
+  const _28d = new Date(todayDate); _28d.setUTCDate(_28d.getUTCDate() - 28)
   const lookback28 = _28d.toISOString().slice(0, 10)
 
   // Parse Body Battery + HRV + RHR from Garmin notes
@@ -1714,18 +1674,33 @@ ipcMain.handle('import:sleep', (event, filePath) => {
     }
 
     const stmt = db.prepare(`
-      INSERT INTO daily_wellness (date, sleep_hours, sleep_quality_1_5, notes)
-      VALUES (@date, @sleep_hours, @sleep_quality_1_5, @notes)
+      INSERT INTO daily_wellness (date, sleep_hours, sleep_quality_1_5, resting_hr, hrv, body_battery, notes, sleep_score, bedtime)
+      VALUES (@date, @sleep_hours, @sleep_quality_1_5, @resting_hr, @hrv, @body_battery, @notes, @sleep_score, @bedtime)
       ON CONFLICT(date) DO UPDATE SET
         sleep_hours       = excluded.sleep_hours,
         sleep_quality_1_5 = excluded.sleep_quality_1_5,
-        notes             = excluded.notes
+        resting_hr        = excluded.resting_hr,
+        hrv               = excluded.hrv,
+        body_battery      = excluded.body_battery,
+        notes             = excluded.notes,
+        sleep_score       = excluded.sleep_score,
+        bedtime           = excluded.bedtime
     `)
 
     let imported = 0
     db.transaction(() => {
       for (const entry of entries) {
-        stmt.run(entry)
+        stmt.run({
+          date: entry.date,
+          sleep_hours: entry.sleep_hours ?? null,
+          sleep_quality_1_5: entry.sleep_quality_1_5 ?? null,
+          resting_hr: entry.resting_hr ?? null,
+          hrv: entry.hrv ?? null,
+          body_battery: entry.body_battery ?? null,
+          notes: entry.notes || '',
+          sleep_score: entry.sleep_score ?? null,
+          bedtime: entry.bedtime ?? null,
+        })
         imported++
       }
     })()
@@ -1963,6 +1938,50 @@ ipcMain.handle('nutrition:import-mfp', (event, filePath) => {
     return { imported, skipped_duplicates, skipped_invalid, batch_id: batchId }
   } catch (err) {
     return { error: err.message }
+  }
+})
+
+// ─── IPC: benchmark:save ─────────────────────────────────────────────────
+ipcMain.handle('benchmark:save', (event, entry) => {
+  db.prepare(`
+    INSERT INTO athlete_benchmarks (metric, value, unit, date, method, notes)
+    VALUES (@metric, @value, @unit, @date, @method, @notes)
+    ON CONFLICT(metric, date) DO UPDATE SET value=excluded.value, unit=excluded.unit, method=excluded.method, notes=excluded.notes
+  `).run({
+    metric: entry.metric,
+    value: entry.value,
+    unit: entry.unit || '',
+    date: entry.date,
+    method: entry.method || 'test',
+    notes: entry.notes || '',
+  })
+  return { ok: true }
+})
+
+// ─── IPC: benchmark:list ─────────────────────────────────────────────────
+ipcMain.handle('benchmark:list', () => {
+  return db.prepare('SELECT * FROM athlete_benchmarks ORDER BY metric ASC, date DESC').all()
+})
+
+// ─── IPC: sync:get-state ─────────────────────────────────────────────────
+ipcMain.handle('sync:get-state', () => {
+  const statePath = require('path').join(__dirname, '../data/sync-state.json')
+  try { return JSON.parse(require('fs').readFileSync(statePath, 'utf8')) } catch { return null }
+})
+
+// ─── IPC: snapshot:generate ──────────────────────────────────────────────
+ipcMain.handle('snapshot:generate', () => {
+  const { generateSnapshot } = require('../src/exporter/snapshot-generator')
+  return generateSnapshot(db)
+})
+
+// ─── IPC: snapshot:sync ──────────────────────────────────────────────────
+ipcMain.handle('snapshot:sync', () => {
+  try {
+    const { runSync } = require('./snapshot-sync')
+    return runSync(db)
+  } catch (err) {
+    return { ok: false, errors: [err.message] }
   }
 })
 

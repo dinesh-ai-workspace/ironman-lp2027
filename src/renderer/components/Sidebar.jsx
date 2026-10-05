@@ -28,6 +28,8 @@ const navItems = [
 
 export default function Sidebar({ currentPage, onNavigate }) {
   const [raceDateStr, setRaceDateStr] = useState(FALLBACK_RACE_DATE)
+  const [syncStatus, setSyncStatus] = useState(null) // null | 'syncing' | 'ok' | 'fail'
+  const [syncResult, setSyncResult] = useState(null)
 
   useEffect(() => {
     if (typeof window.electronAPI === 'undefined') return
@@ -35,6 +37,21 @@ export default function Sidebar({ currentPage, onNavigate }) {
       if (p?.race_date) setRaceDateStr(p.race_date)
     }).catch(() => {})
   }, [])
+
+  async function handleSync() {
+    if (typeof window.electronAPI === 'undefined') return
+    setSyncStatus('syncing')
+    try {
+      const result = await window.electronAPI.syncToDrive()
+      setSyncStatus(result?.ok ? 'ok' : result?.blocked ? 'blocked' : 'fail')
+      setSyncResult(result)
+    } catch (e) {
+      setSyncStatus('fail')
+      setSyncResult({ ok: false, errors: [e.message] })
+    } finally {
+      setTimeout(() => setSyncStatus(null), 8000)
+    }
+  }
 
   const daysToRace = getDaysToRace(raceDateStr)
 
@@ -59,6 +76,43 @@ export default function Sidebar({ currentPage, onNavigate }) {
       ))}
 
       <div style={{ marginTop: 'auto', paddingTop: '24px', borderTop: '1px solid var(--border)' }}>
+        {/* Sync to Drive button */}
+        <button
+          onClick={handleSync}
+          disabled={syncStatus === 'syncing'}
+          style={{
+            width: '100%',
+            marginBottom: '8px',
+            padding: '7px 12px',
+            fontSize: '12px',
+            fontWeight: 600,
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+            background: syncStatus === 'ok' ? 'var(--accent-green)' : (syncStatus === 'fail' || syncStatus === 'blocked') ? '#f97316' : 'var(--bg-card)',
+            color: syncStatus === 'ok' || syncStatus === 'fail' || syncStatus === 'blocked' ? '#0f172a' : 'var(--text-muted)',
+            cursor: syncStatus === 'syncing' ? 'not-allowed' : 'pointer',
+            transition: 'background 0.2s',
+          }}
+        >
+          {syncStatus === 'syncing' ? 'Syncing…' : syncStatus === 'ok' ? 'Synced ✓' : syncStatus === 'blocked' ? 'Blocked ✗' : syncStatus === 'fail' ? 'Failed ✗' : 'Sync to Drive'}
+        </button>
+
+        {syncStatus && syncResult && (
+          <div style={{ fontSize: '10px', color: syncResult.ok ? 'var(--accent-green)' : '#f97316', marginBottom: '8px', lineHeight: '1.4' }}>
+            {syncResult.ok ? (
+              <>
+                {syncResult.files?.snapshot?.fileId && <div>Snapshot: {syncResult.files.snapshot.fileId.slice(0,12)}…</div>}
+                {syncResult.files?.currentPlan?.fileId && <div>Plan: {syncResult.files.currentPlan.fileId.slice(0,12)}…</div>}
+                {syncResult.files?.buildSpec?.fileId && <div>Spec: {syncResult.files.buildSpec.fileId.slice(0,12)}…</div>}
+              </>
+            ) : (
+              <div style={{ color: '#f97316' }}>
+                {(syncResult.errors || ['Unknown error']).map((e, i) => <div key={i}>&#x2717; {e.slice(0, 60)}</div>)}
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
           Race Countdown
         </div>

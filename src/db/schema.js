@@ -79,6 +79,7 @@ function applySchema(db) {
       date TEXT NOT NULL UNIQUE,
       sleep_hours REAL,
       sleep_quality_1_5 INTEGER,
+      sleep_score INTEGER,
       fatigue_1_5 INTEGER,
       soreness_1_5 INTEGER,
       pain_flag INTEGER NOT NULL DEFAULT 0,
@@ -159,6 +160,17 @@ function applySchema(db) {
       pool_length_m INTEGER,
       source TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','csv_garmin','csv_strava','csv_other')),
       import_batch_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS athlete_benchmarks (
+      id      INTEGER PRIMARY KEY AUTOINCREMENT,
+      metric  TEXT NOT NULL,
+      value   REAL NOT NULL,
+      unit    TEXT NOT NULL DEFAULT '',
+      date    TEXT NOT NULL,
+      method  TEXT NOT NULL DEFAULT 'test',
+      notes   TEXT NOT NULL DEFAULT '',
+      UNIQUE(metric, date)
     );
   `);
 }

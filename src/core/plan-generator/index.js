@@ -67,6 +67,7 @@ function blockForWeek(weekNum, blocks) {
 
 /**
  * Build readiness gates for fixed checkpoint weeks.
+ * 11 rows — one per checkpoint week (5, 8, 12, 16, 20, 24, 26, 28, 34, 36, 38).
  * All start as pending with null actual_value.
  *
  * Returns array of gate objects (not yet persisted — no id).
@@ -74,141 +75,91 @@ function blockForWeek(weekNum, blocks) {
 function buildReadinessGates(blocks, planStartDate) {
   const checkpoints = [
     {
+      weekNum: 5,
+      gates: [
+        { discipline: 'multi', metric: 'baselines_w5',
+          target_value: 'GREEN: FTP (20-min Keiser M3 ×0.95), 400m swim TT, 30-min run TT all recorded; zones set before Wk 6 | YELLOW: 1–2 of 3 done | RED: None done → reschedule within 7 days',
+          notes: '' },
+      ],
+    },
+    {
       weekNum: 8,
       gates: [
-        {
-          discipline: 'swim',
-          metric: 'trajectory_check_w8',
-          target_value: 'GREEN: mechanics clearly improving, breathing relaxing, distance-without-panic increasing | YELLOW: one area stalled but others improving | RED: no improvement across 2 consecutive check-ins → pause and address technique',
-          notes: 'STOP condition: trajectory stalled 2 consecutive check-ins',
-        },
-        {
-          discipline: 'bike',
-          metric: 'handling_comfort_w8',
-          target_value: 'GREEN: 2hr outdoor comfortable, cornering and braking confident | YELLOW: completed but handling issues remain | RED: unable to ride 2hr outdoors without major difficulties',
-          notes: '',
-        },
-        {
-          discipline: 'run',
-          metric: 'weekly_mileage_w8',
-          target_value: 'GREEN: 18-20mi/wk, no joint pain, long run 10-12mi | YELLOW: 15-18mi/wk or mild discomfort resolving | RED: persistent joint pain or <15mi/wk without injury explanation',
-          notes: 'STOP condition: persistent joint pain',
-        },
+        { discipline: 'multi', metric: 'trajectory_review_w8',
+          target_value: 'GREEN: Swim pace/100m ≤ Wk 5; all KEY sessions Wks 5–7 ≥85%; no joint pain >3 days | YELLOW: One criterion missed | RED: Two or more missed → hold Wk 9 volume at Wk 7 level',
+          notes: '' },
+      ],
+    },
+    {
+      weekNum: 12,
+      gates: [
+        { discipline: 'swim', metric: 'continuous_1000m',
+          target_value: 'GREEN: 1,000m non-stop, any pace | YELLOW: 800–999m | RED: <800m → add a 4th weekly swim until passed',
+          notes: '' },
       ],
     },
     {
       weekNum: 16,
       gates: [
-        {
-          discipline: 'swim',
-          metric: 'trajectory_pass_w16',
-          target_value: 'GREEN: clear trajectory improvement, comfortable 1500-2000m continuous | YELLOW: trajectory passing but distance secondary | RED: any injury requiring 3+ weeks off, or no improvement at all',
-          notes: 'STOP condition: any injury requiring 3+ weeks off',
-        },
-        {
-          discipline: 'bike',
-          metric: 'climbing_comfort_w16',
-          target_value: 'GREEN: 3-3.5hr with 1,500ft+ climbing, pacing controlled | YELLOW: completed 3hr but climbing still uncomfortable | RED: unable to sustain 3hr ride or major pacing problems on climbs',
-          notes: '',
-        },
-        {
-          discipline: 'run',
-          metric: 'weekly_mileage_w16',
-          target_value: 'GREEN: 20-22mi/wk, long run 11-12mi, fatigue-managed | YELLOW: 17-20mi/wk, long run 9-11mi | RED: persistent fatigue or <17mi/wk without explanation',
-          notes: '',
-        },
+        { discipline: 'bike', metric: 'ftp_retest_w16',
+          target_value: 'GREEN: FTP ≥ Wk 5 FTP | YELLOW: Within 3% below | RED: >3% below → hold volume 1 week',
+          notes: '' },
+      ],
+    },
+    {
+      weekNum: 20,
+      gates: [
+        { discipline: 'swim', metric: 'continuous_1500m',
+          target_value: 'GREEN: 1,500m non-stop, any pace | YELLOW: 1,300–1,499m | RED: <1,300m → add a 4th weekly swim until passed',
+          notes: '' },
       ],
     },
     {
       weekNum: 24,
       gates: [
-        {
-          discipline: 'swim',
-          metric: 'open_water_w24',
-          target_value: 'GREEN: 2,500m+ range, first open water attempted if April+, no panic | YELLOW: pool range good but open water still pending/nervous | RED: severe open-water panic with no improvement or plan to fix',
-          notes: 'STOP condition: severe open-water panic with no improvement',
-        },
-        {
-          discipline: 'bike',
-          metric: 'outdoor_terrain_w24',
-          target_value: 'GREEN: 4hr outdoor rolling terrain, fueling at 60g carbs/hr | YELLOW: completed 4hr but fueling or pacing needs work | RED: cannot sustain 4hr ride or significant nutrition problems',
-          notes: '',
-        },
-        {
-          discipline: 'run',
-          metric: 'weekly_mileage_w24',
-          target_value: 'GREEN: 22-25mi/wk, long run 13mi | YELLOW: 18-22mi/wk, long run 11-13mi | RED: <18mi/wk or long run not progressing past 10mi',
-          notes: '',
-        },
+        { discipline: 'run', metric: 'run_tt_retest_w24',
+          target_value: 'GREEN: 30-min TT distance ≥ Wk 5 | YELLOW: Within 3% below | RED: >3% below → hold volume 1 week',
+          notes: '' },
+      ],
+    },
+    {
+      weekNum: 26,
+      gates: [
+        { discipline: 'multi', metric: 'half_readiness_w26',
+          target_value: 'GREEN: 2,000m continuous swim + 3.5-h ride + 100-min run, same week, different days | YELLOW: 2 of 3 | RED: 0–1 of 3 → race Wk 28 as bike/run only',
+          notes: '' },
       ],
     },
     {
       weekNum: 28,
       gates: [
-        {
-          discipline: 'swim',
-          metric: 'interval_fitness_w28',
-          target_value: 'GREEN: 20x100m on 2:15 relaxed, or clearly trending there + HIM race completed | YELLOW: swim improving, HIM race data collected | RED: cannot complete HIM swim or open water still problematic',
-          notes: 'HIM tune-up race window — race is data collection, not PR attempt',
-        },
-        {
-          discipline: 'bike',
-          metric: 'endurance_w28',
-          target_value: 'GREEN: 4-4.5hr, comfortable hills, fueling dialed | YELLOW: 3.5-4hr, fueling still being refined | RED: cannot ride 3.5hr+ without major forced breaks',
-          notes: 'STOP condition: cannot ride 3.5hr+ without major forced breaks',
-        },
-        {
-          discipline: 'run',
-          metric: 'long_run_w28',
-          target_value: 'GREEN: long run 14-15mi, fatigue-managed | YELLOW: long run 12-14mi, some fatigue accumulation | RED: long run stuck below 12mi or injury signs',
-          notes: '',
-        },
+        { discipline: 'race', metric: 'him_tune_up_race',
+          target_value: 'GREEN: Finished within cutoffs, even pacing, no GI issues | YELLOW: Finished with pacing or GI issues | RED: DNF/DNS → review fueling and pacing before Wk 29',
+          notes: '' },
       ],
     },
     {
-      weekNum: 32,
+      weekNum: 34,
       gates: [
-        {
-          discipline: 'swim',
-          metric: 'open_water_sighting_w32',
-          target_value: 'GREEN: open-water sighting practiced, comfortable in wetsuit | YELLOW: sighting attempted, still nervous but improving | RED: open water still unresolved with no plan to fix before June',
-          notes: 'STOP condition: open water still unresolved with no plan to fix before June',
-        },
-        {
-          discipline: 'bike',
-          metric: 'fueling_w32',
-          target_value: 'GREEN: 5hr hilly, fueling 70g carbs/hr tested and tolerated | YELLOW: 5hr completed, fueling at 60g/hr, still building gut training | RED: GI problems on long rides or unable to sustain 5hr',
-          notes: 'Second half-distance race window ~weeks 40-44',
-        },
-        {
-          discipline: 'run',
-          metric: 'long_run_w32',
-          target_value: 'GREEN: long run 15-16mi, aerobic pace maintained | YELLOW: long run 13-15mi, still building | RED: long run below 12mi or musculoskeletal issues',
-          notes: '',
-        },
+        { discipline: 'swim', metric: 'ow_continuous_3000m',
+          target_value: 'GREEN: 3,000m continuous, wetsuit, sighting (pool OK if water <60°F; record which) | YELLOW: 2,500–2,999m | RED: <2,500m → extra OW/continuous sessions until passed',
+          notes: '' },
       ],
     },
     {
       weekNum: 36,
       gates: [
-        {
-          discipline: 'swim',
-          metric: 'race_ready_swim_w36',
-          target_value: 'GREEN: 4,000m continuous wetsuit, open water comfortable, race-ready | YELLOW: 3,200-4,000m, still some fatigue at distance | RED: breakdown during simulation OR any open injury',
-          notes: 'STOP condition: breakdown during simulation ride OR any open injury',
-        },
-        {
-          discipline: 'bike',
-          metric: 'lp_simulation_w36',
-          target_value: 'GREEN: 5-5.5hr LP-terrain simulation, race fueling executed, well-paced | YELLOW: completed but overcooked or underfueled | RED: could not complete or significant mechanical/nutrition failure',
-          notes: 'Do NOT make swim + bike + run all max tests in same week',
-        },
-        {
-          discipline: 'run',
-          metric: 'last_long_run_w36',
-          target_value: 'GREEN: long run 15-16mi (last one), aerobic and controlled | YELLOW: 13-15mi, acceptable if body managed well | RED: long run skipped or injury signs emerging',
-          notes: 'Last long run before taper — prioritize quality over distance',
-        },
+        { discipline: 'multi', metric: 'im_readiness_w36',
+          target_value: 'GREEN: Within Wks 34–36, injury-free: 3,800m continuous swim + 5-h ride with 30-min brick + 150-min run | YELLOW: 2 of 3 | RED: 0–1 of 3 → conservative race plan',
+          notes: '' },
+      ],
+    },
+    {
+      weekNum: 38,
+      gates: [
+        { discipline: 'race', metric: 'dress_rehearsal',
+          target_value: 'GREEN: Swim 100 min → bike 300 min → run 90 min with race nutrition, no GI issues | YELLOW: One segment shortened | RED: DNF or major GI issue → fix fueling before taper',
+          notes: '' },
       ],
     },
   ];
@@ -281,7 +232,7 @@ function generatePlan(config) {
     plan_start_date: toISO(planStartDate),
     athlete_birth_date: toISO(athleteBirthDate),
     created_at: new Date().toISOString(),
-    status: 'active',
+    status: config.status || 'active',
     version: 1,
   };
 
@@ -298,6 +249,7 @@ function generatePlan(config) {
 
   // Schedule sessions week by week.
   const allSessions = [];
+  const allViolations = [];
 
   // Tune-up race weeks: week 18 (Sprint/Olympic), week 28 (HIM).
   const TUNE_UP_SPRINT = 18;
@@ -314,7 +266,7 @@ function generatePlan(config) {
                          : weekNum === TUNE_UP_HIM    ? 'half_ironman'
                          : null;
 
-    const weekSessions = scheduleWeek({
+    const { sessions: weekSessions, violations: weekViolations } = scheduleWeek({
       weekNum,
       weekStartDate,
       phase,
@@ -325,6 +277,8 @@ function generatePlan(config) {
       templates: WORKOUT_TEMPLATES,
       allScheduledSessions: allSessions.map(s => ({ ...s, _weekNum: weekNumForDate(s.date, planStartDate) })),
     });
+
+    allViolations.push(...weekViolations);
 
     // Tag sessions with _weekNum for internal use (stripped before return).
     for (const s of weekSessions) {
@@ -338,7 +292,7 @@ function generatePlan(config) {
   // Build readiness gates.
   const readinessGates = buildReadinessGates(blocks, planStartDate);
 
-  return { plan, blocks, sessions, readinessGates };
+  return { plan, blocks, sessions, readinessGates, violations: allViolations };
 }
 
 /**

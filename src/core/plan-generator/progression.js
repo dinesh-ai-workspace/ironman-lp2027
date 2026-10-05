@@ -39,7 +39,10 @@ function getRunCaps(weekNum) {
   if (weekNum <= 8) {
     return { weeklyCapMi: 18, longRunCapMi: 12, longRunCapMin: 120 };
   }
-  return { weeklyCapMi: 25, longRunCapMi: 16, longRunCapMin: 150 };
+  if (weekNum <= 13) {
+    return { weeklyCapMi: 25, longRunCapMi: 16, longRunCapMin: 150 };
+  }
+  return { weeklyCapMi: 25, longRunCapMi: 16, longRunCapMin: 165 };
 }
 
 /**
@@ -131,12 +134,14 @@ function getWeeklySessionTargets(phase) {
 
 /**
  * Returns the volume multiplier for step-back weeks.
- * Reduce to approximately 70% of the week's normal volume.
+ * Weeks 1-13: 70% (early base building, gentler recovery).
+ * Weeks 14+:  63% (load rules mandate 60-65% cutback).
  *
+ * @param {number} [weekNum]
  * @returns {number}
  */
-function getStepBackMultiplier() {
-  return 0.7;
+function getStepBackMultiplier(weekNum) {
+  return (weekNum != null && weekNum >= 14) ? 0.63 : 0.7;
 }
 
 module.exports = {
