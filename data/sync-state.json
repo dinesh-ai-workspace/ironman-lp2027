@@ -1,23 +1,23 @@
 {
   "snapshot": {
     "rclonePath": "drive: Claude-Ironman Training/IM_LP2027_Progress_Snapshot.md",
-    "lastSynced": "2026-10-05T21:53:48.283Z",
+    "lastSynced": "2026-10-05T22:20:44.850Z",
     "fileId": "1QzX8x-gvv3ADBflTaoKLHWq-KIftknrl",
-    "modifiedTime": "2026-10-05T21:53:48.305Z",
+    "modifiedTime": "2026-10-05T22:20:44.894Z",
     "owner": "dinu08@gmail.com"
   },
   "currentPlan": {
     "rclonePath": "drive: Claude-Ironman Training/IM_LP2027_Current_Plan.md",
-    "lastSynced": "2026-10-05T21:53:48.283Z",
+    "lastSynced": "2026-10-05T22:20:44.850Z",
     "fileId": "1Ru3zux4OyRW4YcmU8X-Jl9SdI3eggVsb",
-    "modifiedTime": "2026-10-05T21:53:50.378Z",
+    "modifiedTime": "2026-10-05T22:20:48.187Z",
     "owner": "dinu08@gmail.com"
   },
   "buildSpec": {
     "rclonePath": "drive: Claude-Ironman Training/IM_LP2027_Plan_Build_Spec.md",
-    "lastSynced": "2026-10-05T21:53:48.283Z",
+    "lastSynced": "2026-10-05T22:20:44.850Z",
     "fileId": "1ZOVdwqBVV-q07RT_z_qccX-GQyPrXEVm",
-    "modifiedTime": "2026-10-05T21:53:51.634Z",
+    "modifiedTime": "2026-10-05T22:20:50.117Z",
     "owner": "dinu08@gmail.com"
   },
   "processedCoachingNotes": [
@@ -29,10 +29,11 @@
     "Coaching_Notes_2026-10-05-3.md",
     "Coaching_Notes_2026-10-05-4.md",
     "Coaching_Notes_2026-10-05-5.md",
-    "Coaching_Notes_2026-10-05-6.md"
+    "Coaching_Notes_2026-10-05-6.md",
+    "Coaching_Notes_2026-10-05-7.md"
   ],
   "lastSyncError": null,
-  "lastSyncedAt": "2026-10-05T21:53:48.283Z",
+  "lastSyncedAt": "2026-10-05T22:20:44.850Z",
   "regression": {
     "planId": 10,
     "maxSession": "2026-10-04",

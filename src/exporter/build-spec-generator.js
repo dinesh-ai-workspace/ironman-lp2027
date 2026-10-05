@@ -46,16 +46,29 @@ function generateBuildSpec() {
 | Sat | Long bike (KEY) [+ Brick run 20–30 min KEY on Wks 21, 23, 25, 27] |
 | Sun | Easy recovery run (supporting) |
 
-**A/B alternating weekends — Wks 29–38:**
+**Recovery week — Wk 29:**
+
+All sessions Z1–Z2, no hills, no brick. Tue+Thu: swim aerobic 45 + easy run; Wed: bike endurance_z2 60; Fri: swim aerobic 50 (KEY via K1); Sat: long_ride 180 (KEY); Sun: long_run 75 (KEY). Total 515 min.
+
+**A/B alternating weekends — Wks 30–38:**
 
 | Type | Thu | Sat | Sun | Weeks |
 |---|---|---|---|---|
-| A | Medium run 65 min (supporting) | Long ride (KEY) | Long run (KEY) | 29, 31, 33, 35, 37 |
+| A | Medium run 65 min (supporting) | Long ride (KEY) | Long run (KEY) | 31, 33, 35, 37 |
 | B | Long run (KEY) | Long ride (KEY) + Brick 30–45 min (KEY) | Easy 30 min (optional) | 30, 34 |
 | Cutback | Easy run (supporting) | Long ride at 63% (KEY) | Easy (optional) | 32, 36 |
 | DR | Easy 30 min (optional) | Swim 100→Bike 300→Run 90 back-to-back (all KEY) | REST | 38 |
 
 Tue/Wed/Thu swim + Fri OW swim maintained in all A/B weeks. Fri swim = open-water type from Wk 33.
+
+**Taper layout — Wks 41–44:**
+
+| Wk | Key features |
+|---|---|
+| 41 | Sat long_ride 240 (KEY); Thu long_run 150 (KEY) |
+| 42 | Wed bike race_pace 75 S; Thu run race_pace 60 S; Sat long_ride 180 (KEY) + brick_run 20 (KEY); Sun long_run 90 (KEY) |
+| 43 | Wed bike race_pace 60 S; Thu run race_pace 45 S; Sat long_ride 120 (KEY) + brick_run 15 (KEY); Sun long_run 60 (KEY) |
+| 44 | Wed bike race_pace 60 S; Thu run easy 40 S; Sat bike endurance_z2 90 (KEY); Sun run easy 45 (KEY) |
 
 **Step-back weeks:**
 - Wks 1–13: every 4th week × 0.70
@@ -69,7 +82,7 @@ Tue/Wed/Thu swim + Fri OW swim maintained in all A/B weeks. Fri swim = open-wate
 - **Race day** (Sun 2027-07-25): IRONMAN Lake Placid. Target finish: 930 min (≈15:30).
 
 **Load rules (Wks 14–45):**
-- Total weekly volume ≤ 14 h (races excluded)
+- Swim + bike + run weekly volume ≤ 14 h (strength tracked but excluded; races excluded)
 - Week-over-week progression (non-cutback) ≤ 10%
 - Cutback weeks: 50–65% of preceding build week (A/B block cutback weeks structurally reach ~54%; non-A/B weeks reach ~63%)
 - Long run ceiling: 165 min / 16 mi
@@ -241,6 +254,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-05 | **CN-5 #4** — Weight trend uses calendar-day 7-day windows (≥3 readings required); trend = (prior 7-day avg − recent 7-day avg) ÷ 2 lb/wk; labels: below target / on target / above target / losing too fast / gaining (Foundation target 0.5–0.75 lb/wk); "Weigh-ins last 7 days: N (target ≥4)" added under Body Composition table; build spec H C3/W1–W5 updated |
 | 2026-10-05 | **CN-5 #5** — KEY swim per week (rule K1): longest non-optional swim = KEY; tie → later day; Wk 5 exception (Thu TT); race/DR weeks unchanged; all 41 eligible weeks (1–44 excl. 18, 28, 38) updated in Plan ID 10 in place. K2: both caps display as "swim<75%; KEY missed"; lower cap C wins. Build spec A layout + D K1–K2 updated |
 | 2026-10-05 | **CN-5 #6** — Gate tests scheduled: Wk 8 swim time_trial 40 min; Wk 12/20/26 swim continuous_test 50/70/80 min; Wk 16 bike ftp_test 60 min; Wk 24 run time_trial 60 min; Wk 34 purpose update; Wk 35 swim 100→110 min. Run frequency: Tue easy run added Wks 6–14 (25 min, 20 min cutback). Sunday recovery run → supporting Wks 6–28. Wk 38 DR and Wk 45 race zone → Z2. A8 adds continuous_test. Build spec A layout/notes + A8 + changelog updated |
+| 2026-10-05 | **CN-5 #7** — Recovery Wk 29 (515 min, all Z1–Z2). Wk 39: Thu long_run→easy 50, Sun long_run 150 KEY. Wk 41: Sat 240 KEY, Thu long_run 150 KEY. Wks 42–44 taper replaced with race-pace structure (525/385/305 min). 14 h cap now applies to swim+bike+run only (strength excluded). Masters strength 30 min Wed optional added Wks 30–41 (excl. cutback Wks 32/36/40 and DR Wk 38). Build spec load rule, A/B layout, taper section updated |
 
 ---
 
