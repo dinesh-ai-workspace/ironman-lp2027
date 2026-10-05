@@ -104,6 +104,13 @@ function checkRegression(db, state) {
 }
 
 function runSync(db) {
+  // Clear cached copies of generator modules so file edits are picked up without
+  // requiring a full main-process restart (a renderer reload is sufficient).
+  for (const key of Object.keys(require.cache)) {
+    if (key.includes('/src/exporter/') || key.includes('/src/core/')) {
+      delete require.cache[key]
+    }
+  }
   const { generateSnapshot } = require('../src/exporter/snapshot-generator')
   const { generatePlanDoc } = require('../src/exporter/plan-doc-generator')
   const { generateBuildSpec } = require('../src/exporter/build-spec-generator')

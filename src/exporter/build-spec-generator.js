@@ -3,8 +3,8 @@
 function generateBuildSpec() {
   return `# IM_LP2027 Plan Build Spec
 
-**Version:** 1.0
-**Last changed:** 2026-10-04
+**Version:** 2.0
+**Last changed:** 2026-10-05
 **Source:** \`src/core/plan-generator/\` — do not edit Drive copy by hand
 
 ---
@@ -59,7 +59,7 @@ Tue/Wed/Thu swim + Fri OW swim maintained in all A/B weeks. Fri swim = open-wate
 
 **Special weeks:**
 - **Week 5** (2026-10-12): Test week. Wed = FTP bike test 60 min (KEY). Thu = swim TT 40 min (supporting) + run TT 60 min (KEY). Sat = Z2 ride (unchanged).
-- **Week 18** (Sun 2027-01-17): Sprint/Olympic tune-up race (Saturday). Short swim Monday, shake-out run Friday.
+- **Week 18** (Sun 2027-01-17): Sprint/Olympic tune-up race. Short swim Monday, shake-out run Friday.
 - **Week 28** (Sat 2027-03-27): Half-Ironman tune-up race (Saturday). Short swim Tuesday, easy run Wednesday, race Saturday. Race target: 450 min.
 - **Week 38** (Sat 2027-06-05): Dress Rehearsal. Swim 100 min → T1 → Bike 300 min → T2 → Run 90 min back-to-back. Full race nutrition and gear.
 - **Race day** (Sun 2027-07-25): IRONMAN Lake Placid. Target finish: 930 min (≈15:30).
@@ -97,13 +97,37 @@ Defined in \`src/core/plan-generator/index.js → buildReadinessGates()\`. Inser
 | 36 | multi | im_readiness_w36 | GREEN: 3,800 m swim + 5-h ride with 30-min brick + 150-min run, Wks 34–36 |
 | 38 | race | dress_rehearsal | GREEN: Swim 100 min → bike 300 min → run 90 min with race nutrition, no GI issues |
 
+**Gate ownership:** The app NEVER sets a gate to GREEN, YELLOW or RED. Only the coach does, via Coaching_Notes. The app fills an Evidence column with candidates (for swim gates: longest single swim in the gate week and prior week; for multi/race gates: relevant logged sessions). Status stays "pending" until the coach sets it.
+
 **Failure actions are advisory only.** The app does not automatically modify the plan. The coach issues a Coaching_Notes file; the developer implements it.
 
 ---
 
-## D. Matching and Scoring (Scoring v2)
+## D. Matching and Scoring (Scoring v2, rules A1–A11 and C1–C4)
 
 **Single implementation:** \`src/core/scoring/index.js\` — used by both \`electron/main.js\` and \`src/exporter/snapshot-generator.js\`.
+
+**A1. One-to-one:** each logged session is matched to at most one planned session, and each planned session receives at most one (combined) logged entry.
+
+**A2. Same-day merge:** before matching, combine logged sessions with the same discipline on the same date into one entry (sum the minutes, keep the higher avg HR).
+
+**A3. Week boundary:** matching never crosses Mon–Sun week boundaries. A ±2-day window is clipped to the week.
+
+**A4. Same-day-only types:** brick_run, race_simulation and race sessions match only on their planned date (no Pass 2 or Pass 3).
+
+**A5. Pending vs missed:** a planned non-optional session is "pending" (excluded from the score and from the caps) until today > its date + 2 days, or the week has ended, whichever comes first. After that it is "missed". This applies to the current week only; past weeks are final.
+
+**A6. Exact boundaries:** ratio = actual ÷ planned. Credit 100% if ratio ≥ 0.85; 60% if 0.70 ≤ ratio < 0.85; 25% if 0.50 ≤ ratio < 0.70; 0% if < 0.50. Overshoot (bike/run only) when ratio > 1.25 (exactly 1.25 is NOT overshoot).
+
+**A7. Modifiers multiply:** overshoot (×0.8 replaces the 100% tier) and too hard (×0.6) combine — e.g. overshoot and too hard = 0.8 × 0.6 = 48%.
+
+**A8. Test sessions** (type ftp_test, time_trial): credit 100% if a matching log exists with ratio ≥ 0.50; otherwise 0%. No overshoot or intensity modifiers apply.
+
+**A9. Race sessions** (discipline race): credit 100% if a multisport/triathlon activity, or any swim/bike/run logs, exist on the race date. No duration tiers, no overshoot.
+
+**A10. Swim coverage** (for the cap) = ALL logged swim minutes in the week ÷ planned NON-OPTIONAL swim minutes. If planned non-optional swim minutes = 0, the swim cap does not apply.
+
+**A11. KEY-missed cap** uses only sessions that are "missed" under A5. Pending sessions never trigger it.
 
 **optional sessions excluded** from both numerator and denominator. Skipping an optional session never lowers the score; completing one never raises it.
 
@@ -112,8 +136,8 @@ Defined in \`src/core/plan-generator/index.js → buildReadinessGates()\`. Inser
 | Pass | Scope | Eligible sessions | Day window |
 |---|---|---|---|
 | 1 | Same-day, importance-first | All non-optional | 0 days |
-| 2 | Cross-day, KEY only | KEY importance only | ±2 days |
-| 3 | Cross-day, supporting | supporting only | ±2 days |
+| 2 | Cross-day, KEY only | KEY importance only (not same-day-only types) | ±2 days, same week |
+| 3 | Cross-day, supporting | supporting only (not same-day-only types) | ±2 days, same week |
 
 **hasEarlierPlan guard:** A logged session on day D is excluded from Pass 1 if: (a) there is a same-discipline plan on D−1, AND (b) there is **no** same-discipline plan on D.
 
@@ -143,17 +167,37 @@ Swim has no overshoot penalty — extra swim time is welcome on the limiter.
 | D | < 50 |
 
 **Grade caps** (applied to grade only, never to the numeric score):
-- Swim coverage < 75% (swim actual min ÷ swim planned min) → grade ≤ C (cap: "swim<75%")
+- Swim coverage < 75% per A10 (all logged swim min ÷ planned non-optional swim min) → grade ≤ C (cap: "swim<75%")
 - Any KEY session with 0% credit (missed or < 50% of plan) → grade ≤ B (cap: "KEY missed")
 - If both apply, the lower cap wins ("swim<75%" → C).
 
-**Intensity check (Z2 sessions):** For KEY and supporting bike/run sessions with target zone Z2: if avg HR > (Z2 ceiling HR + 5 bpm), credit = credit × 0.6, flag = "too hard". Inactive until Z2 ceiling HR exists in Benchmarks (set after Week 5 tests). Snapshot shows: "Intensity check: inactive (zones not set)".
+**Intensity check (Z2 sessions):** For KEY and supporting bike/run sessions with target zone Z2: if avg HR > (Z2 ceiling HR + 5 bpm), credit = credit × 0.6, flag = "too hard". Activated per discipline as soon as its Z2 ceiling HR exists (set after Week 5 tests). Snapshot shows: "Intensity check: active (run ceiling X bpm, bike ceiling Y bpm)" or "Intensity check: inactive (zones not set)".
 
-**Recovery score (separate from training score):** good night = bedtime ≤ 23:30 AND sleep ≥ 6.5 h. Recovery = good nights ÷ nights with data. Green ≥ 70% | Yellow 40–69% | Red < 40%. Nights with no bedtime data excluded.
+**Recovery rules (C1–C4):**
+
+**C1. Night window:** bedtime 18:00–23:59 = evening; 00:00–05:59 = after midnight (counts as later than 23:30). Bedtimes 06:00–17:59 are naps; ignored for recovery.
+
+**C2. Good night** = bedtime between 18:00 and 23:30 (inclusive) AND sleep ≥ 6.5 h.
+
+**C3. Week membership** is by wake date, Mon–Sun.
+
+**C4. Minimum data:** if a completed week has fewer than 4 nights with data, Status = "insufficient data". The in-progress week shows a colour only once it has ≥ 4 nights.
 
 ---
 
-## E. Units
+## E. Snapshot — Data Freshness Block (CN-5 #3 Part A)
+
+Placed directly under the snapshot header (after Generated and Next gate lines).
+
+A1. One line per source: Activities (Garmin), Sleep/wellness (Garmin), Weight, Nutrition (MyFitnessPal), Benchmarks.
+Format: "\`Label: YYYY-MM-DD (N d ago)\`"
+
+A2. Age = snapshot date (ET) minus the latest date in the DB for that source, in whole days. If age > 2, append " ⚠ stale". Benchmarks are exempt from the stale flag.
+
+A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth line:
+"⚠ Import pending — Recovery/Fueling for the current week may be understated."
+
+## F. Units
 
 | Field | Unit | Notes |
 |---|---|---|
@@ -173,7 +217,7 @@ Swim has no overshoot penalty — extra swim time is welcome on the limiter.
 
 ---
 
-## F. Changelog
+## G. Changelog
 
 | Date | Summary |
 |---|---|
@@ -185,6 +229,149 @@ Swim has no overshoot penalty — extra swim time is welcome on the limiter.
 | 2026-10-04 | **CN-2** — Replaced readiness gates with 11 rows (baselines_w5…dress_rehearsal); fixed Week 18 race date to Sunday 2027-01-17 |
 | 2026-10-04 | **CN-3** — Bedtime populated from Garmin Sleep CSV exports; DB path via resolve-path.js (no __dirname); phase h/wk computed from sessions (EXCLUDED_WEEKS set) |
 | 2026-10-04 | **CN-4** — Scoring v2: optional sessions excluded; overshoot penalty (bike/run > 125% → 80%); grade caps (swim<75%→C, KEY missed→B); recovery table; intensity check stub; score breakdown section; build spec sections A/C/D/E updated |
+| 2026-10-05 | **CN-5 #1** — Scoring rules made explicit (A1–A11): same-day merge, week-boundary clip, same-day-only types, pending vs missed, exact ratio boundaries, modifier multiply, test/race session credit; recovery rules explicit (C1–C4): night window, good night definition, minimum data; Benchmarks entry form (B1) + zone derivation (B2): bike FTP/LTHR/zones, run LTHR/zones, swim pace; Z2 ceilings activate intensity check per discipline (B3); snapshot Benchmarks & Zones shows full zone bands (B4); gate Evidence column auto-populated (D1); snapshot DB path absolute-resolved (D2); build spec v2.0 (D3) |
+| 2026-10-05 | **CN-5 #2** — Fueling module (\`src/core/fueling/index.js\`): MFP data → per-day classification (Rest/Easy/Moderate/Hard/Long), calorie status (under/in range/over), protein and carb checks, weekly status (Insufficient data / Red / Green / Yellow); snapshot Fueling section (weekly table, 14-day daily table, weight trend, MFP range); Weekly Scores table gains Fueling column; stop-loss hint (C5); build spec section H |
+| 2026-10-05 | **CN-5 #3** — Data freshness block (5 sources, stale flag >2 d, import-pending warning); fueling day-type uses weighted training minutes (swim/bike/run 100%, strength/other 50%), daily table shows "weighted (raw)"; logged threshold raised 800→1,200 kcal; build spec H B1/C1 updated |
+| 2026-10-05 | **CN-5 #4** — Weight trend uses calendar-day 7-day windows (≥3 readings required); trend = (prior 7-day avg − recent 7-day avg) ÷ 2 lb/wk; labels: below target / on target / above target / losing too fast / gaining (Foundation target 0.5–0.75 lb/wk); "Weigh-ins last 7 days: N (target ≥4)" added under Body Composition table; build spec H C3/W1–W5 updated |
+
+---
+
+## H. Benchmarks & Zones
+
+**Implementation:** \`src/core/scoring/zones.js\`
+
+**Rounding:** all derived values use half-up: \`halfUp(n) = Math.floor(n + 0.5)\`
+
+### Bike FTP Test
+
+Input: 20-min avg power (W) = P, 20-min avg HR (bpm) = H
+
+| Derived | Formula |
+|---|---|
+| FTP | halfUp(P × 0.95) |
+| Bike LTHR | halfUp(H × 0.95) |
+| Bike Z2 ceiling HR | top of bike HR Z2 band |
+
+**Bike power zones (% FTP):**
+
+| Zone | % FTP | Notes |
+|---|---|---|
+| Z1 | < 56% | |
+| Z2 | 56–75% | ceiling used for intensity check |
+| Z3 | 76–90% | |
+| Z4 | 91–105% | |
+| Z5 | > 105% | |
+
+**Bike HR zones (% bike LTHR):**
+
+| Zone | % bike LTHR |
+|---|---|
+| Z1 | < 81% |
+| Z2 | 81–89% |
+| Z3 | 90–93% |
+| Z4 | 94–99% |
+| Z5 | ≥ 100% |
+
+### Run 30-min TT
+
+Input: avg HR of the last 20 min (bpm) = R
+
+| Derived | Formula |
+|---|---|
+| Run LTHR | R (no × 0.95) |
+| Run Z2 ceiling HR | top of run HR Z2 band |
+
+**Run HR zones (% run LTHR):**
+
+| Zone | % run LTHR |
+|---|---|
+| Z1 | < 85% |
+| Z2 | 85–89% |
+| Z3 | 90–94% |
+| Z4 | 95–99% |
+| Z5 | ≥ 100% |
+
+### Swim 400m TT
+
+Input: time in mm:ss = T (converted to decimal minutes)
+
+**Pace per 100m** = T ÷ 4. Record only; no swim zones.
+
+---
+
+## I. Fueling
+
+**Implementation:** \`src/core/fueling/index.js\`
+
+**Reference body mass:** 68.5 kg (carb thresholds; recalibrate if weight changes significantly).
+
+### A. Import
+
+A1. Parse MyFitnessPal CSV, summing all meals per date: calories, protein (g), carbohydrates (g), fat (g).
+A2. Re-importing an overlapping date range replaces those dates (DELETE + INSERT per date+meal+source); never duplicates.
+A3. A date counts as "logged" only if total calories ≥ 1,200. Lower totals are treated as incomplete: excluded from averages and listed as "incomplete" in the snapshot. (Raised from 800 per CN-5 #3 C1.)
+
+### B. Day type and targets
+
+B1. For fueling purposes only, classify by **weighted** training minutes: swim, bike, and run count at 100%; strength and all other activities (hike, walk, etc.) count at 50%. The daily table shows the weighted value with the raw total in brackets, e.g. "124 (179)". Execution scoring and weekly actual hours are not affected.
+
+| Day type | Weighted training min |
+|---|---|
+| Rest | 0 |
+| Easy | 1–75 |
+| Moderate | 76–120 |
+| Hard | 121–180 |
+| Long | > 180 |
+
+B2. Calorie target range by day type:
+
+| Day type | Range (kcal) |
+|---|---|
+| Rest | 1,750–2,000 |
+| Easy | 2,000–2,300 |
+| Moderate | 2,300–2,600 |
+| Hard | 2,550–3,150 |
+| Long | 3,000–3,800 |
+
+B3. Protein target: 155 g/day. A day "hits protein" if protein ≥ 140 g.
+
+B4. Carbohydrate check (68.5 kg reference):
+
+| Day type | Min carbs (g) | Basis |
+|---|---|---|
+| Rest / Easy | ≥ 206 | 3 g/kg |
+| Moderate | ≥ 343 | 5 g/kg |
+| Hard / Long | ≥ 411 | 6 g/kg |
+
+Flag "low carb" on Moderate, Hard and Long days below the threshold. Rest and Easy are not flagged.
+
+B5. Calorie status: "in range" = within tier range; "under" = below range; "over" = above range.
+
+### C. Weekly status and snapshot
+
+C1. Per Mon–Sun week, logged days only: protein hits, calorie under/in range/over, low-carb days (Moderate/Hard/Long only), avg kcal / protein / carbs.
+
+C2. Status:
+- **Insufficient data:** fewer than 4 logged days.
+- **Red:** protein hit on fewer than 3 logged days, OR "under" on 3 or more Hard/Long days, OR any training day (≥ 1 min) below 1,600 kcal.
+- **Green:** protein hit on ≥ 70% of logged days AND no Hard/Long day "under" AND low-carb days ≤ 1.
+- **Yellow:** everything else.
+
+C3. Weight trend (updated CN-5 #4, W1–W5):
+
+W1. 7-day avg for date D = mean of all weight readings dated D−6 through D (calendar days). Requires ≥ 3 readings in the window; shows "—" if fewer.
+
+W2. Trend = (7-day avg at the most recent date with ≥ 3 readings) minus (7-day avg 14 days earlier, also requiring ≥ 3 readings), divided by 2, expressed in lb/wk (positive = loss). If either window is insufficient: "Weight trend: insufficient data (need ≥3 weigh-ins per 7 days)".
+
+W3. Labels vs Foundation/Aerobic Base target (0.5–0.75 lb/wk): "below target" (< 0.5), "on target" (0.5–0.75), "above target" (> 0.75–1.0), "losing too fast" (> 1.0), "gaining" (≤ 0).
+
+W4. The Fueling weight-trend line and the stop-loss rule (C5) both use W1–W2.
+
+W5. Under the Body Composition table: "Weigh-ins last 7 days: N (target ≥4)" where N = distinct weigh-in days in the last 7 calendar days.
+
+C4. Snapshot Fueling section: weekly table (last 4 completed + current in progress), 14-day daily table (Date | Day type | Train min | kcal | Target range | Protein g | Carbs g | Flags), weight-trend line, MFP date range.
+
+C5. Stop-loss hint: if the most recent completed week has Recovery Red AND weight trend loss AND RHR rose ≥ 3 bpm vs prior week average, prepend "Strategy stop-loss: multiple Yellow signals — consider +150–300 kcal/day" to the snapshot. Coach decides; app only flags.
 `
 }
 

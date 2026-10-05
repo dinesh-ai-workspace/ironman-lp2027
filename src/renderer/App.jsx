@@ -7,6 +7,7 @@ import Wellness from './pages/Wellness'
 import Nutrition from './pages/Nutrition'
 import FatLoss from './pages/FatLoss'
 import Import from './pages/Import'
+import Benchmarks from './pages/Benchmarks'
 
 export default function App() {
   const [page, setPage] = useState('dashboard')
@@ -20,6 +21,7 @@ export default function App() {
       case 'nutrition': return <Nutrition />
       case 'fatloss': return <FatLoss />
       case 'import': return <Import />
+      case 'benchmarks': return <Benchmarks />
       default: return <Dashboard />
     }
   }

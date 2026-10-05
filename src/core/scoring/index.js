@@ -2,12 +2,52 @@
 
 const IMP_W = { key: 10, supporting: 4, optional: 1 }
 
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+
+function dateAdd(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function getWeekStart(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z')
+  const dow = d.getUTCDay()          // 0=Sun, 1=Mon … 6=Sat
+  const daysBack = (dow + 6) % 7    // days back to Monday
+  d.setUTCDate(d.getUTCDate() - daysBack)
+  return d.toISOString().slice(0, 10)
+}
+
+function getWeekEnd(dateStr) {
+  return dateAdd(getWeekStart(dateStr), 6)  // Sunday
+}
+
+function daysDiff(a, b) {
+  return Math.abs((new Date(a + 'T00:00:00Z') - new Date(b + 'T00:00:00Z')) / 86400000)
+}
+
+// ─── A2: Same-day merge ────────────────────────────────────────────────────────
+
+function mergeLogsByDayDisc(loggedRows) {
+  const map = new Map()
+  for (const l of loggedRows) {
+    const key = l.date + '|' + l.discipline
+    if (!map.has(key)) {
+      map.set(key, { ...l, _ids: [l.id] })
+    } else {
+      const m = map.get(key)
+      m.duration = (m.duration || 0) + (l.duration || 0)
+      if (l.avg_hr != null) {
+        m.avg_hr = m.avg_hr != null ? Math.max(m.avg_hr, l.avg_hr) : l.avg_hr
+      }
+      m._ids.push(l.id)
+    }
+  }
+  return [...map.values()]
+}
+
 // ─── Credit ───────────────────────────────────────────────────────────────────
 
-/**
- * Session credit, including overshoot rule for bike/run.
- * Swim never incurs an overshoot penalty.
- */
 function sessionCredit(pct, discipline) {
   if ((discipline === 'bike' || discipline === 'run') && pct > 1.25) return 0.8
   if (pct >= 0.85) return 1.0
@@ -34,49 +74,62 @@ function applyGradeCap(grade, cap) {
   return grade
 }
 
-// ─── Scoring ──────────────────────────────────────────────────────────────────
+// ─── Scoring (v2, rules A1–A11) ───────────────────────────────────────────────
+
+// A4: types that only match on their planned date (no cross-day)
+const SAME_DAY_ONLY_TYPES = new Set(['brick_run', 'race_simulation', 'race'])
+// A8: test sessions get flat credit (100% if ratio ≥ 0.50)
+const TEST_TYPES = new Set(['ftp_test', 'time_trial'])
 
 /**
- * 3-pass greedy matching + score computation (Scoring v2).
+ * 3-pass greedy matching + score computation (Scoring v2 with A1–A11).
  *
- * Changes from v1:
- *  - Optional sessions excluded from numerator AND denominator.
- *  - Bike/run sessions with actual > 125% of plan get credit = 80% (overshoot).
- *  - Swim has no overshoot penalty.
- *  - Grade caps: swim<75% coverage → max C; any KEY with 0% credit → max B.
- *  - Score rounded half-up to integer.
- *  - Intensity check (Z2 cap): applied when Z2 ceiling HR is in Benchmarks.
- *
- * @param {Array} plannedRows  - {id, discipline, type, importance, target_duration, date, target_intensity_zone}
- * @param {Array} loggedRows   - {id, discipline, duration, date, avg_hr}
- * @param {string} cutoffDate  - YYYY-MM-DD inclusive upper bound for planned sessions
+ * @param {Array}  plannedRows  {id, discipline, type, importance, target_duration, date, target_intensity_zone}
+ * @param {Array}  loggedRows   {id, discipline, duration, date, avg_hr}
+ * @param {string} cutoffDate   YYYY-MM-DD upper bound (weekEnd for past weeks, today for current)
  * @param {Object} options
- * @param {Object} options.z2Ceilings  - { bike: number|null, run: number|null } HR ceilings
- * @returns {Object|null}
+ * @param {Object} options.z2Ceilings  {bike: number|null, run: number|null}
+ * @param {string} options.today       actual current date (ET); defaults to cutoffDate
  */
 function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
-  const { z2Ceilings = {} } = options
+  const { z2Ceilings = {}, today = cutoffDate } = options
 
-  // Exclude optional sessions from scoring
+  // Exclude optional sessions
   const included = plannedRows.filter(p => p.importance !== 'optional' && p.date <= cutoffDate)
   if (included.length === 0) return null
 
   const impOrder = { key: 0, supporting: 1, optional: 2 }
 
-  // hasEarlierPlan guard
-  const hasEarlierPlan = new Set()
+  // A2: merge same-day same-discipline logs before matching
+  const mergedLogs = mergeLogsByDayDisc(loggedRows)
+
+  // hasEarlierPlan guard — computed on original rows, then mapped onto merged
+  const hasEarlierPlanOrigIds = new Set()
   for (const l of loggedRows) {
-    const prev = new Date(l.date + 'T00:00:00Z')
-    prev.setUTCDate(prev.getUTCDate() - 1)
-    const prevStr = prev.toISOString().slice(0, 10)
-    const hasPrevPlan = included.some(p => p.discipline === l.discipline && p.date === prevStr)
+    const prev = dateAdd(l.date, -1)
+    const hasPrevPlan = included.some(p => p.discipline === l.discipline && p.date === prev)
     const hasOwnPlan  = included.some(p => p.discipline === l.discipline && p.date === l.date)
-    if (hasPrevPlan && !hasOwnPlan) hasEarlierPlan.add(l.id)
+    if (hasPrevPlan && !hasOwnPlan) hasEarlierPlanOrigIds.add(l.id)
+  }
+  const hasEarlierPlanMergedIds = new Set()
+  for (const m of mergedLogs) {
+    if ((m._ids || [m.id]).some(id => hasEarlierPlanOrigIds.has(id))) {
+      hasEarlierPlanMergedIds.add(m.id)
+    }
   }
 
-  function daysDiff(a, b) {
-    return Math.abs((new Date(a + 'T00:00:00Z') - new Date(b + 'T00:00:00Z')) / 86400000)
+  // A5: a session is pending (excluded from score+caps) until the cross-day window closes
+  // Applies only to the current week (cutoffDate < weekEnd); past weeks are always final.
+  function isPending(p) {
+    const weekEnd = getWeekEnd(p.date)
+    if (cutoffDate >= weekEnd) return false  // past week: finalized
+    return today <= dateAdd(p.date, 2)       // still within ±2-day window
   }
+
+  // Merged-log bookkeeping
+  const usedIds = new Set()
+  function useLog(l)  { for (const id of (l._ids || [l.id])) usedIds.add(id) }
+  function isUsed(l)  { return (l._ids || [l.id]).some(id => usedIds.has(id)) }
 
   function pickBest(plan, candidates, crossDay = false) {
     return candidates.reduce((best, l) => {
@@ -96,61 +149,81 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
     })
   }
 
-  const usedIds = new Set()
   const matchMap = new Map()
 
-  // Pass 1: same-day, importance-first
-  const sortedByImp = [...included].sort((a, b) => {
-    const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
-    if (di !== 0) return di
-    if (a.date !== b.date) return a.date.localeCompare(b.date)
-    return b.target_duration - a.target_duration
-  })
-  for (const p of sortedByImp) {
-    const candidates = loggedRows.filter(l =>
-      l.discipline === p.discipline && !usedIds.has(l.id)
-        && l.date === p.date && !hasEarlierPlan.has(l.id)
+  // Pre-pass: A9 Race sessions — 100% if multisport/triathlon activity OR any swim/bike/run logs on race date
+  for (const p of included.filter(p => p.discipline === 'race')) {
+    const raceLogs = mergedLogs.filter(l =>
+      !isUsed(l) && l.date === p.date &&
+      ['swim', 'bike', 'run', 'race', 'multisport', 'triathlon'].includes(l.discipline)
     )
-    if (candidates.length > 0) {
-      const best = pickBest(p, candidates)
-      usedIds.add(best.id)
-      matchMap.set(p, best)
+    if (raceLogs.length > 0) {
+      const totalDur = raceLogs.reduce((s, l) => s + (l.duration || 0), 0)
+      const synthetic = {
+        id: p.date + '_race', date: p.date, discipline: 'race',
+        duration: totalDur, avg_hr: null,
+        _ids: raceLogs.flatMap(l => l._ids || [l.id]),
+      }
+      for (const l of raceLogs) useLog(l)
+      matchMap.set(p, synthetic)
     }
   }
 
-  // Pass 2: cross-day, KEY only, ±2 days
+  // Pass 1: same-day, importance-first (skip race — already handled above)
+  const sortedByImp = [...included]
+    .filter(p => p.discipline !== 'race')
+    .sort((a, b) => {
+      const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
+      if (di !== 0) return di
+      if (a.date !== b.date) return a.date.localeCompare(b.date)
+      return b.target_duration - a.target_duration
+    })
+  for (const p of sortedByImp) {
+    const cands = mergedLogs.filter(l =>
+      l.discipline === p.discipline && !isUsed(l)
+        && l.date === p.date && !hasEarlierPlanMergedIds.has(l.id)
+    )
+    if (cands.length > 0) {
+      const best = pickBest(p, cands)
+      useLog(best); matchMap.set(p, best)
+    }
+  }
+
+  // Pass 2: cross-day, KEY only, ±2 days, same week (A3), skip same-day-only types (A4)
   const keyPlans = included
-    .filter(p => p.importance === 'key' && !matchMap.has(p))
+    .filter(p => p.importance === 'key' && !matchMap.has(p) &&
+      !SAME_DAY_ONLY_TYPES.has(p.type) && p.discipline !== 'race')
     .sort((a, b) => a.date.localeCompare(b.date))
   for (const p of keyPlans) {
-    const candidates = loggedRows.filter(l =>
-      l.discipline === p.discipline && !usedIds.has(l.id)
+    const cands = mergedLogs.filter(l =>
+      l.discipline === p.discipline && !isUsed(l)
         && daysDiff(l.date, p.date) <= 2
+        && getWeekStart(l.date) === getWeekStart(p.date)  // A3: clip to week
     )
-    if (candidates.length > 0) {
-      const best = pickBest(p, candidates, true)
-      usedIds.add(best.id)
-      matchMap.set(p, best)
+    if (cands.length > 0) {
+      const best = pickBest(p, cands, true)
+      useLog(best); matchMap.set(p, best)
     }
   }
 
-  // Pass 3: cross-day, supporting, ±2 days
+  // Pass 3: cross-day, supporting, ±2 days, same week (A3), skip same-day-only types (A4)
   const nonKeyPlans = included
-    .filter(p => p.importance !== 'key' && !matchMap.has(p))
+    .filter(p => p.importance !== 'key' && !matchMap.has(p) &&
+      !SAME_DAY_ONLY_TYPES.has(p.type) && p.discipline !== 'race')
     .sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date)
       const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
       return di !== 0 ? di : b.target_duration - a.target_duration
     })
   for (const p of nonKeyPlans) {
-    const candidates = loggedRows.filter(l =>
-      l.discipline === p.discipline && !usedIds.has(l.id)
+    const cands = mergedLogs.filter(l =>
+      l.discipline === p.discipline && !isUsed(l)
         && daysDiff(l.date, p.date) <= 2
+        && getWeekStart(l.date) === getWeekStart(p.date)  // A3: clip to week
     )
-    if (candidates.length > 0) {
-      const best = pickBest(p, candidates, true)
-      usedIds.add(best.id)
-      matchMap.set(p, best)
+    if (cands.length > 0) {
+      const best = pickBest(p, cands, true)
+      useLog(best); matchMap.set(p, best)
     }
   }
 
@@ -160,9 +233,16 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
   const matchDetails = []
 
   for (const p of included) {
+    const matched = matchMap.get(p)
+
+    // A5: pending — exclude from score and caps
+    if (!matched && isPending(p)) {
+      matchDetails.push({ plan: p, log: null, pct: null, credit: null, flags: ['pending'] })
+      continue
+    }
+
     const w = IMP_W[p.importance] || 1
     totalWeight += w
-    const matched = matchMap.get(p)
 
     let pct = null
     let credit = 0
@@ -170,23 +250,32 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
 
     if (matched) {
       pct = (matched.duration || 0) / p.target_duration
-      credit = sessionCredit(pct, p.discipline)
 
-      // Overshoot flag (bike/run > 125%)
-      if ((p.discipline === 'bike' || p.discipline === 'run') && pct > 1.25) {
-        flags.push('overshoot')
-      }
+      if (p.discipline === 'race') {
+        // A9: race always 100% if matched
+        credit = 1.0
+      } else if (TEST_TYPES.has(p.type)) {
+        // A8: test session — 100% if ratio ≥ 0.50, no overshoot or intensity modifiers
+        credit = pct >= 0.50 ? 1.0 : 0.0
+      } else {
+        // A6: standard credit tiers (pct > 1.25 is overshoot; exactly 1.25 is not)
+        credit = sessionCredit(pct, p.discipline)
 
-      // Change 5: intensity check (Z2 sessions, inactive until zones set)
-      const ceiling = z2Ceilings[p.discipline]
-      if (
-        ceiling != null && matched.avg_hr != null &&
-        (p.importance === 'key' || p.importance === 'supporting') &&
-        p.target_intensity_zone === 2 &&
-        matched.avg_hr > ceiling + 5
-      ) {
-        credit = credit * 0.6
-        flags.push('too hard')
+        if ((p.discipline === 'bike' || p.discipline === 'run') && pct > 1.25) {
+          flags.push('overshoot')
+        }
+
+        // A7: intensity check multiplies credit (overshoot × too hard = 0.8 × 0.6 = 0.48)
+        const ceiling = z2Ceilings[p.discipline]
+        if (
+          ceiling != null && matched.avg_hr != null &&
+          (p.importance === 'key' || p.importance === 'supporting') &&
+          p.target_intensity_zone === 2 &&
+          matched.avg_hr > ceiling + 5
+        ) {
+          credit = credit * 0.6
+          flags.push('too hard')
+        }
       }
     } else {
       flags.push('missed')
@@ -202,19 +291,18 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
 
   const baseGrade = gradeFromScore(score)
 
-  // Grade cap: swim coverage
-  const swimPlanned = loggedRows  // use ALL logged swim vs ALL planned swim for coverage
+  // A10: swim coverage = ALL logged swim / planned NON-OPTIONAL swim
   const swimP = included.filter(p => p.discipline === 'swim').reduce((s, p) => s + p.target_duration, 0)
   const swimA = loggedRows.filter(l => l.discipline === 'swim').reduce((s, l) => s + (l.duration || 0), 0)
 
   let cap = '—'
   if (swimP > 0 && swimA / swimP < 0.75) cap = 'swim<75%'
 
-  // Grade cap: KEY with 0% credit
-  const keyZero = matchDetails.some(d => d.plan.importance === 'key' && d.credit === 0)
-  if (keyZero) {
-    if (cap !== 'swim<75%') cap = 'KEY missed'  // swim<75% (→C) is lower, wins if both
-  }
+  // A11: KEY-missed cap only for sessions flagged 'missed' (not 'pending')
+  const keyMissed = matchDetails.some(d =>
+    d.plan.importance === 'key' && d.flags.includes('missed')
+  )
+  if (keyMissed && cap !== 'swim<75%') cap = 'KEY missed'
 
   const grade = applyGradeCap(baseGrade, cap)
 
@@ -228,48 +316,61 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
   }
 }
 
-// ─── Recovery ─────────────────────────────────────────────────────────────────
+// ─── Recovery (rules C1–C4) ───────────────────────────────────────────────────
 
-/**
- * Compute recovery stats for a set of wellness rows.
- * "Good night" = bedtime ≤ 23:30 AND sleep ≥ 6.5 h.
- * Bedtime "≤ 23:30" means: HH:MM falls between 05:01 and 23:30 (not after midnight).
- */
 function computeRecovery(wellnessRows) {
-  function isBedtimeOnTime(bedtime) {
-    if (!bedtime || !/^\d{2}:\d{2}$/.test(bedtime)) return false
+  function getBedtimeMins(bedtime) {
+    if (!bedtime || !/^\d{2}:\d{2}$/.test(bedtime)) return null
     const [h, m] = bedtime.split(':').map(Number)
-    const mins = h * 60 + m
-    return mins > 300 && mins <= 1410  // 05:01–23:30
+    return h * 60 + m
   }
 
-  const rowsWithBedtime = wellnessRows.filter(w => w.bedtime && /^\d{2}:\d{2}$/.test(w.bedtime))
-  const nightsWithData = rowsWithBedtime.length
-  const goodNights = wellnessRows.filter(w =>
-    isBedtimeOnTime(w.bedtime) && (w.sleep_hours || 0) >= 6.5
-  ).length
+  // C1: 18:00–23:59 = evening; 00:00–05:59 = after midnight; 06:00–17:59 = nap (ignore)
+  function isValidBedtime(mins) {
+    return (mins >= 1080 && mins <= 1439) || (mins >= 0 && mins <= 359)
+  }
+
+  // C2: good night = bedtime 18:00–23:30 (inclusive) AND sleep ≥ 6.5 h
+  function isGoodBedtime(mins) {
+    return mins >= 1080 && mins <= 1410
+  }
+
+  const rowsWithData = wellnessRows.filter(w => {
+    const mins = getBedtimeMins(w.bedtime)
+    return mins !== null && isValidBedtime(mins)
+  })
+  const nightsWithData = rowsWithData.length
+
+  const goodNights = rowsWithData.filter(w => {
+    const mins = getBedtimeMins(w.bedtime)
+    return isGoodBedtime(mins) && (w.sleep_hours || 0) >= 6.5
+  }).length
 
   const pct = nightsWithData > 0 ? Math.round(goodNights / nightsWithData * 100) : null
+
+  // C4: fewer than 4 nights with data → "insufficient data"
   let status = '—'
-  if (pct != null) {
+  if (nightsWithData > 0 && nightsWithData < 4) {
+    status = 'insufficient data'
+  } else if (pct != null) {
     if (pct >= 70) status = 'Green'
     else if (pct >= 40) status = 'Yellow'
     else status = 'Red'
   }
 
-  // Average sleep hours
+  // Average sleep hours (all rows)
   const sleepVals = wellnessRows.filter(w => w.sleep_hours != null).map(w => w.sleep_hours)
   const avgSleepH = sleepVals.length > 0
     ? (sleepVals.reduce((a, b) => a + b, 0) / sleepVals.length).toFixed(1)
     : '—'
 
-  // Circular mean of bedtime (handles wrap around midnight)
+  // Circular mean of bedtime (valid bedtimes only — C1)
   let avgBedtime = '—'
-  if (rowsWithBedtime.length > 0) {
+  if (rowsWithData.length > 0) {
     let sinSum = 0, cosSum = 0
-    for (const w of rowsWithBedtime) {
-      const [h, m] = w.bedtime.split(':').map(Number)
-      const theta = 2 * Math.PI * (h * 60 + m) / 1440
+    for (const w of rowsWithData) {
+      const mins = getBedtimeMins(w.bedtime)
+      const theta = 2 * Math.PI * mins / 1440
       sinSum += Math.sin(theta)
       cosSum += Math.cos(theta)
     }
@@ -295,4 +396,4 @@ function computeRecovery(wellnessRows) {
   return { goodNights, nightsWithData, pct, status, avgSleepH, avgBedtime, avgRhr, avgBb }
 }
 
-module.exports = { IMP_W, sessionCredit, gradeFromScore, computeScore, computeRecovery }
+module.exports = { IMP_W, sessionCredit, gradeFromScore, computeScore, computeRecovery, dateAdd, getWeekStart, getWeekEnd }

@@ -945,7 +945,7 @@ ipcMain.handle('stats:readiness', () => {
   }
 
   // ── Capacity gates (6-week rolling window) ───────────────────────────────
-  const _6wAgo = new Date(todayUTC)
+  const _6wAgo = new Date(todayDate)
   _6wAgo.setUTCDate(_6wAgo.getUTCDate() - 42)
   const _6wAgoStr = _6wAgo.toISOString().slice(0, 10)
 
@@ -969,7 +969,7 @@ ipcMain.handle('stats:readiness', () => {
   const runGate  = evalCapacityGate(maxRun?.val  ?? null, RUN_T)
 
   // ── Durability gate (adherence-based) ─────────────────────────────────────
-  const _28dAgo = new Date(todayUTC)
+  const _28dAgo = new Date(todayDate)
   _28dAgo.setUTCDate(_28dAgo.getUTCDate() - 28)
   const _28dAgoStr = _28dAgo.toISOString().slice(0, 10)
 
@@ -1364,7 +1364,7 @@ ipcMain.handle('stats:readiness-score', () => {
   ).all(today)
 
   // Last 7 days of logged sessions with rpe >= 7
-  const _7d = new Date(_now); _7d.setDate(_7d.getDate() - 7)
+  const _7d = new Date(todayDate); _7d.setDate(_7d.getDate() - 7)
   const lookback7 = `${_7d.getFullYear()}-${String(_7d.getMonth()+1).padStart(2,'0')}-${String(_7d.getDate()).padStart(2,'0')}`
   const hardSessions7d = db.prepare(
     'SELECT duration, rpe FROM logged_sessions WHERE date >= ? AND date <= ? AND rpe >= 7'
@@ -1961,6 +1961,69 @@ ipcMain.handle('benchmark:save', (event, entry) => {
 // ─── IPC: benchmark:list ─────────────────────────────────────────────────
 ipcMain.handle('benchmark:list', () => {
   return db.prepare('SELECT * FROM athlete_benchmarks ORDER BY metric ASC, date DESC').all()
+})
+
+// ─── IPC: benchmark:saveTest ──────────────────────────────────────────────
+ipcMain.handle('benchmark:saveTest', (event, data) => {
+  const { deriveBikeZones, deriveRunZones, deriveSwimPace } = require('../src/core/scoring/zones')
+  const { type, date } = data
+
+  function saveMetric(metric, value, unit, method, notes = '') {
+    db.prepare(`
+      INSERT INTO athlete_benchmarks (metric, value, unit, date, method, notes)
+      VALUES (@metric, @value, @unit, @date, @method, @notes)
+      ON CONFLICT(metric, date) DO UPDATE SET value=excluded.value, unit=excluded.unit, method=excluded.method, notes=excluded.notes
+    `).run({ metric, value, unit, date, method: method || 'test', notes })
+  }
+
+  if (type === 'bike') {
+    const { power20, hr20 } = data
+    const z = deriveBikeZones(Number(power20), Number(hr20))
+    saveMetric('bike_power20_w', power20, 'W', 'test')
+    saveMetric('bike_hr20_bpm', hr20, 'bpm', 'test')
+    saveMetric('bike_ftp', z.ftp, 'W', 'derived')
+    saveMetric('bike_lthr', z.bikeLthr, 'bpm', 'derived')
+    saveMetric('bike_ceiling_hr', z.bikeCeiling, 'bpm', 'derived')
+    saveMetric('bike_pwr_z2_min', z.powerZones.z2[0], 'W', 'derived')
+    saveMetric('bike_pwr_z2_max', z.powerZones.z2[1], 'W', 'derived')
+    saveMetric('bike_pwr_z3_min', z.powerZones.z3[0], 'W', 'derived')
+    saveMetric('bike_pwr_z3_max', z.powerZones.z3[1], 'W', 'derived')
+    saveMetric('bike_pwr_z4_min', z.powerZones.z4[0], 'W', 'derived')
+    saveMetric('bike_pwr_z4_max', z.powerZones.z4[1], 'W', 'derived')
+    saveMetric('bike_pwr_z5_min', z.powerZones.z5min, 'W', 'derived')
+    saveMetric('bike_hr_z2_min', z.bikeHrZones.z2[0], 'bpm', 'derived')
+    saveMetric('bike_hr_z2_max', z.bikeHrZones.z2[1], 'bpm', 'derived')
+    saveMetric('bike_hr_z3_min', z.bikeHrZones.z3[0], 'bpm', 'derived')
+    saveMetric('bike_hr_z3_max', z.bikeHrZones.z3[1], 'bpm', 'derived')
+    saveMetric('bike_hr_z4_min', z.bikeHrZones.z4[0], 'bpm', 'derived')
+    saveMetric('bike_hr_z4_max', z.bikeHrZones.z4[1], 'bpm', 'derived')
+    saveMetric('bike_hr_z5_min', z.bikeHrZones.z5min, 'bpm', 'derived')
+  } else if (type === 'run') {
+    const { lastHr20, distance } = data
+    const z = deriveRunZones(Number(lastHr20))
+    saveMetric('run_lasthr20_bpm', lastHr20, 'bpm', 'test')
+    saveMetric('run_lthr', z.runLthr, 'bpm', 'derived')
+    saveMetric('run_ceiling_hr', z.runCeiling, 'bpm', 'derived')
+    if (distance != null) saveMetric('run_tt_distance_mi', distance, 'mi', 'test')
+    saveMetric('run_hr_z2_min', z.runHrZones.z2[0], 'bpm', 'derived')
+    saveMetric('run_hr_z2_max', z.runHrZones.z2[1], 'bpm', 'derived')
+    saveMetric('run_hr_z3_min', z.runHrZones.z3[0], 'bpm', 'derived')
+    saveMetric('run_hr_z3_max', z.runHrZones.z3[1], 'bpm', 'derived')
+    saveMetric('run_hr_z4_min', z.runHrZones.z4[0], 'bpm', 'derived')
+    saveMetric('run_hr_z4_max', z.runHrZones.z4[1], 'bpm', 'derived')
+    saveMetric('run_hr_z5_min', z.runHrZones.z5min, 'bpm', 'derived')
+  } else if (type === 'swim') {
+    const { time400m } = data  // "mm:ss" string
+    const [mm, ss] = String(time400m).split(':').map(Number)
+    const time400mMin = mm + ss / 60
+    const sw = deriveSwimPace(time400mMin)
+    saveMetric('swim_400m_min', time400mMin, 'min', 'test')
+    saveMetric('swim_pace_100m', sw.pace100m, 'min/100m', 'derived')
+  } else {
+    return { ok: false, error: 'Unknown test type: ' + type }
+  }
+
+  return { ok: true }
 })
 
 // ─── IPC: sync:get-state ─────────────────────────────────────────────────

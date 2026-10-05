@@ -1,6 +1,9 @@
 'use strict'
 
+const path = require('path')
 const { computeScore, computeRecovery, IMP_W } = require('../core/scoring')
+const { deriveBikeZones, deriveRunZones, deriveSwimPace } = require('../core/scoring/zones')
+const { classifyDayType, computeWeightedTrainMin, calorieStatus, isComplete, hitsProtein, isLowCarb, computeWeeklyFueling, computeWeightTrend, formatFreshness, sevenDayAvg, CALORIE_RANGES } = require('../core/fueling')
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PLAN_START_STR = '2026-09-14'
@@ -75,6 +78,48 @@ function generateSnapshot(db) {
   const today = todayStr()
   const wkNum = currentWeekNum()
 
+  // Helper: aggregate per-day fueling data for a date range and compute weekly status
+  function computeWeeklyFuelingForRange(dbRef, startStr, endStr) {
+    const nutRows = dbRef.prepare(
+      'SELECT date, SUM(calories) as kcal, SUM(protein_g) as pro, SUM(carbs_g) as carbs FROM nutrition_logs WHERE date>=? AND date<=? GROUP BY date'
+    ).all(startStr, endStr)
+    // CN-5 #3 B1: per-discipline minutes for weighted train-min calculation
+    const discByDate = {}
+    for (const l of dbRef.prepare(
+      'SELECT date, discipline, SUM(duration) as dur FROM logged_sessions WHERE date>=? AND date<=? GROUP BY date, discipline'
+    ).all(startStr, endStr)) {
+      if (!discByDate[l.date]) discByDate[l.date] = {}
+      discByDate[l.date][l.discipline] = (discByDate[l.date][l.discipline] || 0) + (l.dur || 0)
+    }
+    const days = nutRows.map(r => ({
+      date: r.date,
+      totalCal: r.kcal || 0,
+      protein_g: r.pro || 0,
+      carbs_g: r.carbs || 0,
+      trainMin: computeWeightedTrainMin(discByDate[r.date] || {}),
+    }))
+    return computeWeeklyFueling(days)
+  }
+
+  // D2: absolute resolved DB path — fail fast if relative
+  const dbAbsPath = path.resolve(db.name)
+  if (!path.isAbsolute(dbAbsPath)) {
+    throw new Error('DB path is not absolute after resolve: ' + dbAbsPath)
+  }
+
+  // B3: read z2Ceilings for intensity check activation
+  const ceilingRows = db.prepare(
+    "SELECT metric, value FROM athlete_benchmarks WHERE metric IN ('bike_ceiling_hr', 'run_ceiling_hr') ORDER BY date DESC"
+  ).all()
+  const z2Ceilings = {}
+  for (const r of ceilingRows) {
+    if (r.metric === 'bike_ceiling_hr' && z2Ceilings.bike == null) z2Ceilings.bike = r.value
+    if (r.metric === 'run_ceiling_hr'  && z2Ceilings.run  == null) z2Ceilings.run  = r.value
+  }
+  const intensityCheckLine = (z2Ceilings.bike != null || z2Ceilings.run != null)
+    ? `Intensity check: active (${[z2Ceilings.run != null ? `run ceiling ${z2Ceilings.run} bpm` : null, z2Ceilings.bike != null ? `bike ceiling ${z2Ceilings.bike} bpm` : null].filter(Boolean).join(', ')})`
+    : 'Intensity check: inactive (zones not set)'
+
   // ── Active plan ──────────────────────────────────────────────────────────
   const activePlan = db.prepare(
     "SELECT * FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1"
@@ -116,7 +161,7 @@ function generateSnapshot(db) {
       'SELECT * FROM daily_wellness WHERE date>=? AND date<=? ORDER BY date ASC'
     ).all(startStr, endStr)
 
-    const scoreResult = computeScore(plannedRows, loggedRows, endStr)
+    const scoreResult = computeScore(plannedRows, loggedRows, endStr, { z2Ceilings, today })
 
     // Volume
     const plannedMin = plannedRows.reduce((s, r) => s + (r.target_duration || 0), 0)
@@ -149,6 +194,9 @@ function generateSnapshot(db) {
 
     const recovery = computeRecovery(wellnessRows)
 
+    // Fueling for this week
+    const fueling = computeWeeklyFuelingForRange(db, startStr, endStr)
+
     completedWeeks.push({
       wk, startStr, endStr,
       score: scoreResult?.score ?? null,
@@ -161,14 +209,14 @@ function generateSnapshot(db) {
       swimA, swimP, bikeA, bikeP, runA, runP,
       strDone, strPlanned,
       keyDone, keyTotal,
-      recovery,
+      recovery, fueling,
     })
   }
 
-  const weeklyHeader = '| Wk | Dates | Score | Grade | Cap | Planned h | Actual h | Swim A/P | Bike A/P | Run A/P | Str done/pl | KEYs done | Recovery |\n' +
-                       '|---|---|---|---|---|---|---|---|---|---|---|---|---|'
+  const weeklyHeader = '| Wk | Dates | Score | Grade | Cap | Planned h | Actual h | Swim A/P | Bike A/P | Run A/P | Str done/pl | KEYs done | Recovery | Fueling |\n' +
+                       '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'
   const weeklyRows = completedWeeks.map(w =>
-    `| ${w.wk} | ${w.startStr}–${w.endStr} | ${w.score ?? '—'} | ${w.grade} | ${w.cap} | ${w.plannedH} | ${w.actualH} | ${w.swimA}/${w.swimP} | ${w.bikeA}/${w.bikeP} | ${w.runA}/${w.runP} | ${w.strDone}/${w.strPlanned} | ${w.keyDone}/${w.keyTotal} | ${w.recovery.status} |`
+    `| ${w.wk} | ${w.startStr}–${w.endStr} | ${w.score ?? '—'} | ${w.grade} | ${w.cap} | ${w.plannedH} | ${w.actualH} | ${w.swimA}/${w.swimP} | ${w.bikeA}/${w.bikeP} | ${w.runA}/${w.runP} | ${w.strDone}/${w.strPlanned} | ${w.keyDone}/${w.keyTotal} | ${w.recovery.status} | ${w.fueling.status} |`
   ).join('\n')
 
   // ─── Recovery table ────────────────────────────────────────────────────────
@@ -363,25 +411,15 @@ function generateSnapshot(db) {
     WHERE date>=? GROUP BY date ORDER BY date DESC
   `).all(since30)
 
-  // 7-day rolling average
-  const weightByDate = {}
-  for (const r of bodyComp30) {
-    if (r.weight_lb != null) weightByDate[r.date] = r.weight_lb
-  }
+  // All weight rows needed for W1 calendar-window 7-day avg (sevenDayAvg handles ≥3 guard)
+  const weightRowsAll = db.prepare(
+    'SELECT date, AVG(weight_lb) as weight_lb FROM body_composition WHERE weight_lb IS NOT NULL GROUP BY date ORDER BY date ASC'
+  ).all()
 
-  const sortedDates = Object.keys(weightByDate).sort()
   const bcRows = bodyComp30.map(r => {
-    // Find dates within 6 days before this date for rolling avg
-    const idx = sortedDates.indexOf(r.date)
-    let rollingVals = []
-    for (let i = Math.max(0, idx - 6); i <= idx; i++) {
-      const v = weightByDate[sortedDates[i]]
-      if (v != null) rollingVals.push(v)
-    }
-    const rollingAvg = rollingVals.length > 0
-      ? (rollingVals.reduce((a, b) => a + b, 0) / rollingVals.length).toFixed(1)
-      : '—'
-    return `| ${r.date} | ${dash(r.weight_lb != null ? fmt1(r.weight_lb) : null)} | ${rollingAvg} |`
+    const avg = sevenDayAvg(r.date, weightRowsAll)
+    const avgStr = avg != null ? avg.toFixed(1) : '—'
+    return `| ${r.date} | ${dash(r.weight_lb != null ? fmt1(r.weight_lb) : null)} | ${avgStr} |`
   }).join('\n')
 
   const bcHeader = '| Date | Weight lb | 7-day avg lb |\n|---|---|---|'
@@ -404,10 +442,67 @@ function generateSnapshot(db) {
     if (!latestBenchmarks[b.metric]) latestBenchmarks[b.metric] = b
   }
 
-  const benchHeader = '| Metric | Value | Unit | Date | Method |\n|---|---|---|---|---|'
-  const benchRows = Object.values(latestBenchmarks).map(b =>
-    `| ${b.metric} | ${fmt1(b.value)} | ${b.unit || '—'} | ${b.date} | ${b.method} |`
-  ).join('\n')
+  function bm(metric) { return latestBenchmarks[metric]?.value ?? null }
+
+  // B4: derive full zone bands if raw test values exist
+  const benchSections = []
+
+  const power20raw = bm('bike_power20_w')
+  const hr20raw    = bm('bike_hr20_bpm')
+  if (power20raw != null && hr20raw != null) {
+    const bz = deriveBikeZones(power20raw, hr20raw)
+    const bikeDate = latestBenchmarks['bike_power20_w']?.date ?? '—'
+    const pZ = bz.powerZones
+    const hZ = bz.bikeHrZones
+    benchSections.push([
+      `### Bike FTP Test (${bikeDate})`,
+      `- 20-min avg power: ${power20raw} W | 20-min avg HR: ${hr20raw} bpm`,
+      `- **FTP: ${bz.ftp} W** | **Bike LTHR: ${bz.bikeLthr} bpm** | **Z2 ceiling: ${bz.bikeCeiling} bpm**`,
+      '',
+      '| Zone | Power (W) | Bike HR (bpm) |',
+      '|---|---|---|',
+      `| Z1 | < ${pZ.z2[0]} | < ${hZ.z2[0]} |`,
+      `| Z2 | ${pZ.z2[0]}–${pZ.z2[1]} | ${hZ.z2[0]}–${hZ.z2[1]} |`,
+      `| Z3 | ${pZ.z3[0]}–${pZ.z3[1]} | ${hZ.z3[0]}–${hZ.z3[1]} |`,
+      `| Z4 | ${pZ.z4[0]}–${pZ.z4[1]} | ${hZ.z4[0]}–${hZ.z4[1]} |`,
+      `| Z5 | ≥ ${pZ.z5min} | ≥ ${hZ.z5min} |`,
+    ].join('\n'))
+  }
+
+  const lastHr20raw = bm('run_lasthr20_bpm')
+  if (lastHr20raw != null) {
+    const rz = deriveRunZones(lastHr20raw)
+    const runTTDate = latestBenchmarks['run_lasthr20_bpm']?.date ?? '—'
+    const rZ = rz.runHrZones
+    const runDist = bm('run_tt_distance_mi')
+    benchSections.push([
+      `### Run 30-min TT (${runTTDate})`,
+      `- Last-20-min avg HR: ${lastHr20raw} bpm${runDist != null ? ` | Distance: ${runDist.toFixed(2)} mi` : ''}`,
+      `- **Run LTHR: ${rz.runLthr} bpm** | **Z2 ceiling: ${rz.runCeiling} bpm**`,
+      '',
+      '| Zone | Run HR (bpm) |',
+      '|---|---|',
+      `| Z1 | < ${rZ.z2[0]} |`,
+      `| Z2 | ${rZ.z2[0]}–${rZ.z2[1]} |`,
+      `| Z3 | ${rZ.z3[0]}–${rZ.z3[1]} |`,
+      `| Z4 | ${rZ.z4[0]}–${rZ.z4[1]} |`,
+      `| Z5 | ≥ ${rZ.z5min} |`,
+    ].join('\n'))
+  }
+
+  const swim400mMin = bm('swim_400m_min')
+  if (swim400mMin != null) {
+    const sw = deriveSwimPace(swim400mMin)
+    const swimTTDate = latestBenchmarks['swim_400m_min']?.date ?? '—'
+    benchSections.push([
+      `### Swim 400m TT (${swimTTDate})`,
+      `- Time: ${Math.floor(swim400mMin)}:${String(Math.round((swim400mMin % 1) * 60)).padStart(2,'0')} | **Pace per 100m: ${sw.paceFormatted}**`,
+    ].join('\n'))
+  }
+
+  const benchContent = benchSections.length > 0
+    ? benchSections.join('\n\n')
+    : '— No test results recorded yet'
 
   // Activity records
   const longestSwim = db.prepare(
@@ -427,13 +522,38 @@ function generateSnapshot(db) {
   ].join('\n')
 
   // ─── Section 6: Readiness Gates ───────────────────────────────────────────
+  // D1: compute evidence candidates dynamically; app never sets status (coach does)
   const gates = db.prepare(
     'SELECT * FROM readiness_gates WHERE plan_id=? ORDER BY week_num ASC, discipline ASC'
   ).all(planId)
 
+  function gateEvidence(g) {
+    if (g.discipline === 'swim') {
+      // Longest single swim in gate week and prior week (m + min)
+      const gateWeekStart = weekStartFor(g.week_num)
+      const priorWeekStart = weekStartFor(Math.max(1, g.week_num - 1))
+      const longest = db.prepare(
+        "SELECT distance, duration, date FROM logged_sessions WHERE discipline='swim' AND distance IS NOT NULL AND date>=? AND date<=? ORDER BY distance DESC LIMIT 1"
+      ).get(priorWeekStart, dateAdd(gateWeekStart, 6))
+      if (longest) {
+        const metres = longest.distance != null ? Math.round(longest.distance * 1609.34) : '—'
+        return `${metres}m / ${fmtInt(longest.duration)}min on ${longest.date}`
+      }
+      return '—'
+    }
+    // multi / race: show relevant logged sessions in gate week range
+    const gateWeekStart = weekStartFor(g.week_num)
+    const gateWeekEnd = dateAdd(gateWeekStart, 6)
+    const sessions = db.prepare(
+      "SELECT discipline, duration, date FROM logged_sessions WHERE discipline IN ('swim','bike','run') AND date>=? AND date<=? ORDER BY date"
+    ).all(gateWeekStart, gateWeekEnd)
+    if (sessions.length === 0) return '—'
+    return sessions.map(s => `${s.discipline} ${fmtInt(s.duration)}min on ${s.date}`).slice(0, 3).join('; ')
+  }
+
   const gateHeader = '| Gate | Week | Status | Evidence |\n|---|---|---|---|'
   const gateRows = gates.map(g =>
-    `| ${g.discipline} ${g.metric} | ${g.week_num} | ${g.status} | ${dash(g.actual_value)} |`
+    `| ${g.discipline} ${g.metric} | ${g.week_num} | ${g.status} | ${gateEvidence(g)} |`
   ).join('\n')
 
   // ─── Section 7: Next 7 Days ───────────────────────────────────────────────
@@ -459,20 +579,164 @@ function generateSnapshot(db) {
     ? recentNotes.map(n => `**${n.date}**: ${n.notes}`).join('\n\n')
     : '— No recent notes'
 
+  // ─── Fueling section ─────────────────────────────────────────────────────
+  // Weekly fueling table: last 4 completed weeks + current week
+  const fuelingWeeklyHeader = '| Wk | Dates | Status | Logged days | Protein hits | Cal under | Cal in range | Cal over | Low-carb days | Avg kcal | Avg protein g | Avg carbs g |\n' +
+                               '|---|---|---|---|---|---|---|---|---|---|---|---|'
+  const fuelingWeeklyRows = completedWeeks.map(w => {
+    const f = w.fueling
+    if (f.loggedDays < 4) {
+      return `| ${w.wk} | ${w.startStr}–${w.endStr} | ${f.status} | ${f.loggedDays} | — | — | — | — | — | — | — | — |`
+    }
+    return `| ${w.wk} | ${w.startStr}–${w.endStr} | ${f.status} | ${f.loggedDays} | ${f.proteinHits} | ${f.calUnder} | ${f.calInRange} | ${f.calOver} | ${f.lowCarbDays} | ${f.avgKcal} | ${f.avgProtein} | ${f.avgCarbs} |`
+  })
+  const currFueling = computeWeeklyFuelingForRange(db, weekStartFor(wkNum), today)
+  const currFuelingRow = currFueling.loggedDays < 4
+    ? `| ${wkNum} (in progress) | ${weekStartFor(wkNum)}–${today} | ${currFueling.status} | ${currFueling.loggedDays} | — | — | — | — | — | — | — | — |`
+    : `| ${wkNum} (in progress) | ${weekStartFor(wkNum)}–${today} | ${currFueling.status} | ${currFueling.loggedDays} | ${currFueling.proteinHits} | ${currFueling.calUnder} | ${currFueling.calInRange} | ${currFueling.calOver} | ${currFueling.lowCarbDays} | ${currFueling.avgKcal} | ${currFueling.avgProtein} | ${currFueling.avgCarbs} |`
+  fuelingWeeklyRows.push(currFuelingRow)
+
+  // 14-day daily fueling table
+  const nut14 = db.prepare(
+    'SELECT date, SUM(calories) as kcal, SUM(protein_g) as pro, SUM(carbs_g) as carbs, SUM(fat_g) as fat FROM nutrition_logs WHERE date>=? AND date<=? GROUP BY date ORDER BY date DESC'
+  ).all(since14, today)
+  // CN-5 #3 B1: per-discipline minutes for weighted train-min
+  const discByDate14 = {}
+  for (const l of db.prepare(
+    'SELECT date, discipline, SUM(duration) as dur FROM logged_sessions WHERE date>=? AND date<=? GROUP BY date, discipline'
+  ).all(since14, today)) {
+    if (!discByDate14[l.date]) discByDate14[l.date] = {}
+    discByDate14[l.date][l.discipline] = (discByDate14[l.date][l.discipline] || 0) + (l.dur || 0)
+  }
+
+  const fuelingDailyHeader = '| Date | Day type | Train min | kcal | Target range | Protein g | Carbs g | Flags |\n' +
+                              '|---|---|---|---|---|---|---|---|'
+  const fuelingDailyRows = nut14.map(r => {
+    const discMins = discByDate14[r.date] || {}
+    const rawMin = Object.values(discMins).reduce((s, v) => s + v, 0)
+    const weightedMin = computeWeightedTrainMin(discMins)
+    const weightedDisplay = Math.floor(weightedMin + 0.5)  // round half-up
+    const trainMinStr = rawMin > 0 ? `${weightedDisplay} (${rawMin})` : '0'
+    const kcal = Math.round(r.kcal || 0)
+    const dayType = classifyDayType(weightedMin)
+    const range = CALORIE_RANGES[dayType]
+    const rangeStr = range ? `${range[0]}–${range[1]}` : '—'
+    const protein = Math.round(r.pro || 0)
+    const carbs = Math.round(r.carbs || 0)
+    const flags = []
+    if (!isComplete(kcal)) {
+      flags.push('incomplete')
+    } else {
+      const cs = calorieStatus(kcal, dayType)
+      if (cs === 'under') flags.push('under')
+      else if (cs === 'over') flags.push('over')
+      if (!hitsProtein(protein)) flags.push('protein low')
+      if (isLowCarb(dayType, carbs)) flags.push('low carb')
+    }
+    return `| ${r.date} | ${dayType} | ${trainMinStr} | ${kcal} | ${rangeStr} | ${protein} | ${carbs} | ${flags.length > 0 ? flags.join(', ') : '—'} |`
+  })
+
+  // CN-5 #4 W1-W3: calendar-window weight trend (weightRowsAll already queried above)
+  const trendResult = computeWeightTrend(weightRowsAll)
+  let weightTrendLine
+  if (trendResult) {
+    const rateStr = trendResult.lossPerWeek > 0
+      ? `${trendResult.lossPerWeek} lb/wk loss`
+      : `${Math.abs(trendResult.lossPerWeek)} lb/wk gain`
+    weightTrendLine = `Weight trend: ${trendResult.avgPrior} → ${trendResult.avgRecent} lb, ${rateStr}, "${trendResult.label}"`
+  } else {
+    weightTrendLine = 'Weight trend: insufficient data (need ≥3 weigh-ins per 7 days)'
+  }
+  // CN-5 #4 W5: weigh-ins last 7 days
+  const weighInsLast7 = db.prepare(
+    'SELECT COUNT(DISTINCT date) as cnt FROM body_composition WHERE weight_lb IS NOT NULL AND date>=? AND date<=?'
+  ).get(dateAdd(today, -6), today)
+  const weighInsLine = `Weigh-ins last 7 days: ${weighInsLast7.cnt} (target ≥4)`
+
+  // T6 context: MFP date range and logged/incomplete counts
+  const mfpRange = db.prepare(
+    "SELECT MIN(date) as minDate, MAX(date) as maxDate, COUNT(DISTINCT date) as totalDates FROM nutrition_logs WHERE source='csv_myfitnesspal'"
+  ).get() || {}
+  const mfpDaySums = db.prepare(
+    "SELECT date, SUM(calories) as kcal FROM nutrition_logs WHERE source='csv_myfitnesspal' GROUP BY date"
+  ).all()
+  const mfpLogged = mfpDaySums.filter(r => isComplete(r.kcal)).length
+  const mfpIncomplete = mfpDaySums.length - mfpLogged
+  const mfpRangeLine = mfpDaySums.length > 0
+    ? `MFP data: ${mfpRange.minDate} to ${mfpRange.maxDate} | ${mfpLogged} logged days, ${mfpIncomplete} incomplete`
+    : 'MFP data: none imported'
+
+  // CN-5 #3 Part A: Data Freshness block
+  const freshActivities = db.prepare('SELECT MAX(date) as d FROM logged_sessions').get()?.d || null
+  const freshSleep = db.prepare(
+    'SELECT MAX(date) as d FROM daily_wellness WHERE sleep_score IS NOT NULL OR sleep_hours IS NOT NULL'
+  ).get()?.d || null
+  const freshWeight = db.prepare(
+    'SELECT MAX(date) as d FROM body_composition WHERE weight_lb IS NOT NULL'
+  ).get()?.d || null
+  const freshNutrition = db.prepare(
+    "SELECT MAX(date) as d FROM nutrition_logs WHERE source='csv_myfitnesspal'"
+  ).get()?.d || null
+  const freshBenchmarks = db.prepare('SELECT MAX(date) as d FROM athlete_benchmarks').get()?.d || null
+
+  const freshnessLines = [
+    formatFreshness('Activities', freshActivities, today, false),
+    formatFreshness('Sleep/wellness', freshSleep, today, false),
+    formatFreshness('Weight', freshWeight, today, false),
+    formatFreshness('Nutrition', freshNutrition, today, false),
+    formatFreshness('Benchmarks', freshBenchmarks, today, true),
+  ]
+  const isStaleActivities  = freshActivities && (new Date(today + 'T00:00:00Z') - new Date(freshActivities + 'T00:00:00Z')) / 86400000 > 2
+  const isStaleSleep       = freshSleep && (new Date(today + 'T00:00:00Z') - new Date(freshSleep + 'T00:00:00Z')) / 86400000 > 2
+  const isStaleNutrition   = freshNutrition && (new Date(today + 'T00:00:00Z') - new Date(freshNutrition + 'T00:00:00Z')) / 86400000 > 2
+  const anyCoreStaleness   = isStaleActivities || isStaleSleep || isStaleNutrition
+  const dataFreshnessBlock = [
+    ...freshnessLines,
+    ...(anyCoreStaleness ? ['⚠ Import pending — Recovery/Fueling for the current week may be understated.'] : []),
+  ].join('\n')
+
+  // C5: stop-loss hint
+  let stopLossHint = null
+  if (completedWeeks.length >= 2) {
+    const lastWk  = completedWeeks[0]
+    const prevWk  = completedWeeks[1]
+    const recovRed = lastWk.recovery.status === 'Red'
+    const weightLoss = trendResult && trendResult.lossPerWeek > 0
+    const rhrRise = (lastWk.recovery.avgRhr !== '—' && prevWk.recovery.avgRhr !== '—')
+      && (lastWk.recovery.avgRhr - prevWk.recovery.avgRhr >= 3)
+    if (recovRed && weightLoss && rhrRise) {
+      stopLossHint = 'Strategy stop-loss: multiple Yellow signals — consider +150–300 kcal/day'
+    }
+  }
+
   // ─── Assemble markdown ────────────────────────────────────────────────────
   const lines = [
+    ...(stopLossHint ? [`> ⚠ **${stopLossHint}**`, ''] : []),
     '# IM_LP2027 Progress Snapshot',
-    `Generated: ${formatGeneratedAt()} | Plan ID ${planId} v${activePlan?.version ?? '?'} | DB: ${db.name} | Spec: v1.0 | Spec changed: 2026-10-04 | Wk ${wkNum} of ${TOTAL_PLAN_WEEKS} — ${phaseName}`,
+    `Generated: ${formatGeneratedAt()} | Plan ID ${planId} v${activePlan?.version ?? '?'} | DB: ${dbAbsPath} | Spec: v2.0 | Spec changed: 2026-10-05 | Wk ${wkNum} of ${TOTAL_PLAN_WEEKS} — ${phaseName}`,
     `Next gate: ${nextGateStr}`,
+    '',
+    '## Data Freshness',
+    dataFreshnessBlock,
     '',
     `## Weekly Scores — Last 4 Completed Weeks`,
     weeklyHeader,
-    weeklyRows || '| — | No completed weeks yet | — | — | — | — | — | — | — | — | — | — | — |',
-    'Intensity check: inactive (zones not set)',
+    weeklyRows || '| — | No completed weeks yet | — | — | — | — | — | — | — | — | — | — | — | — |',
+    intensityCheckLine,
     '',
     '## Recovery',
     recoveryHeader,
     recoveryTableRows.join('\n'),
+    '',
+    '## Fueling',
+    fuelingWeeklyHeader,
+    fuelingWeeklyRows.join('\n') || '| — | No data |',
+    '',
+    fuelingDailyHeader,
+    fuelingDailyRows.join('\n') || '| — | — | — | — | — | — | — | — |',
+    '',
+    weightTrendLine,
+    mfpRangeLine,
     '',
     '## Score Breakdown',
     breakdownSections.join('\n\n') || '— No completed weeks yet',
@@ -491,10 +755,10 @@ function generateSnapshot(db) {
     bcHeader,
     bcRows || '| — | — | — |',
     latestBFStr,
+    weighInsLine,
     '',
     `## Benchmarks & Zones`,
-    benchHeader,
-    benchRows || '| — | — | — | — | — |',
+    benchContent,
     '',
     activityRecords,
     '',

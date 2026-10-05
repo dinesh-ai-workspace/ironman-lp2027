@@ -69,4 +69,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSyncState: () => ipcRenderer.invoke('sync:get-state'),
   saveBenchmark: (entry) => ipcRenderer.invoke('benchmark:save', entry),
   getBenchmarks: () => ipcRenderer.invoke('benchmark:list'),
+  saveTestResults: (data) => ipcRenderer.invoke('benchmark:saveTest', data),
 })

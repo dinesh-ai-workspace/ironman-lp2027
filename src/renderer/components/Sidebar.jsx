@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { LayoutDashboard, PlusCircle, CalendarDays, Moon, UtensilsCrossed, TrendingDown, Upload } from 'lucide-react'
+import { LayoutDashboard, PlusCircle, CalendarDays, Moon, UtensilsCrossed, TrendingDown, Upload, FlaskConical } from 'lucide-react'
 
 const FALLBACK_RACE_DATE = '2027-07-25'
 
@@ -23,6 +23,7 @@ const navItems = [
   { key: 'nutrition', label: 'Nutrition', Icon: UtensilsCrossed },
   { key: 'fatloss', label: 'BFP Tracker', Icon: TrendingDown },
   { key: 'import', label: 'Import Data', Icon: Upload },
+  { key: 'benchmarks', label: 'Benchmarks', Icon: FlaskConical },
   { key: 'logger', label: 'Log Session', Icon: PlusCircle },
 ]
 
