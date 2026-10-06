@@ -175,8 +175,8 @@ function generatePlanDoc(db) {
     }
 
     const sessionTableHeader =
-      '| Day | Date | Discipline | Type | Tier | Target min | Zone | Purpose |\n' +
-      '|---|---|---|---|---|---|---|---|'
+      '| Day | Date | Discipline | Type | Tier | Target min | Zone | Purpose | Target m | Note |\n' +
+      '|---|---|---|---|---|---|---|---|---|---|'
 
     const sessionRows = wkSessions
       .sort((a, b) => {
@@ -184,7 +184,7 @@ function generatePlanDoc(db) {
         return a.discipline.localeCompare(b.discipline)
       })
       .map(s =>
-        `| ${dayName(s.date)} | ${s.date} | ${s.discipline} | ${s.type} | ${s.importance} | ${s.target_duration} | Z${s.target_intensity_zone} | ${(s.purpose || '').slice(0, 60)} |`
+        `| ${dayName(s.date)} | ${s.date} | ${s.discipline} | ${s.type} | ${s.importance} | ${s.target_duration} | Z${s.target_intensity_zone} | ${(s.purpose || '').slice(0, 60)} | ${s.target_distance_m ?? '—'} | ${(s.notes || '').slice(0, 50) || '—'} |`
       ).join('\n')
 
     weekSections.push([

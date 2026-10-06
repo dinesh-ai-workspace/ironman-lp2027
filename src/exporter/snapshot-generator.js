@@ -398,12 +398,14 @@ function generateSnapshot(db) {
         avgHr: dash(log.avg_hr), powerPace: dash(log.avg_power),
         rpe: dash(log.rpe), status,
         reason: (log.reason && log.reason !== 'completed') ? log.reason : '—',
-        note: (log.notes||'').slice(0, 40) || '—', _order: 0,
+        note: (p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes.slice(0,40) : (log.notes||'').slice(0,40)) || '—', _order: 0,
       })
     } else if (p.date < today) {
-      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '✗ missed', reason: '—', note: '—', _order: 0 })
+      const missedNote = p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes.slice(0,40) : '—'
+      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '✗ missed', reason: '—', note: missedNote, _order: 0 })
     } else if (p.date === today) {
-      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '⏳ pending', reason: '—', note: '—', _order: 0 })
+      const pendingNote = p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes.slice(0,40) : '—'
+      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '⏳ pending', reason: '—', note: pendingNote, _order: 0 })
     }
   }
 
@@ -592,10 +594,23 @@ function generateSnapshot(db) {
     "SELECT distance, duration, date FROM logged_sessions WHERE discipline='run' AND distance IS NOT NULL ORDER BY distance DESC LIMIT 1"
   ).get()
 
+  // Swim continuity progress (CN-5 #10)
+  const bestSwim30 = db.prepare(
+    "SELECT MAX(distance) as d FROM logged_sessions WHERE discipline='swim' AND distance IS NOT NULL AND date >= ?"
+  ).get(since30)
+  const bestUnbrokenM = bestSwim30?.d != null ? Math.round(bestSwim30.d * 1609.34) : null
+  const currWkEnduranceSess = db.prepare(
+    "SELECT target_distance_m FROM planned_sessions WHERE plan_id=? AND discipline='swim' AND type='endurance_continuous' AND date>=? AND date<=? ORDER BY date LIMIT 1"
+  ).get(planId, currWkStart, dateAdd(currWkStart, 6))
+  const currWkTarget = currWkEnduranceSess?.target_distance_m ?? 100
+  const onTrack = bestUnbrokenM != null && bestUnbrokenM >= currWkTarget - 50 ? 'YES' : 'NO'
+  const swimContinuityLine = `Swim continuity: ${bestUnbrokenM != null ? bestUnbrokenM + 'm' : '—'} (best unbroken freestyle, last 30 days) | Week 12 gate: 1,000m | On track: ${onTrack}`
+
   const activityRecords = [
     `Longest swim: ${longestSwim?.distance != null ? Math.round(longestSwim.distance * 1609.34) + ' m' : '—'}${longestSwim?.duration != null ? ' (' + fmtInt(longestSwim.duration) + ' min)' : ''} on ${longestSwim?.date ?? '—'}`,
     `Longest ride: ${longestBike?.duration != null ? fmtInt(longestBike.duration) + ' min' : '—'}${longestBike?.distance != null ? ' (' + fmt1(longestBike.distance) + ' mi)' : ''} on ${longestBike?.date ?? '—'}`,
     `Longest run: ${longestRun?.distance != null ? fmt2(longestRun.distance) + ' mi' : '—'}${longestRun?.duration != null ? ' (' + fmtInt(longestRun.duration) + ' min)' : ''} on ${longestRun?.date ?? '—'}`,
+    swimContinuityLine,
   ].join('\n')
 
   // ─── Section 6: Readiness Gates ───────────────────────────────────────────

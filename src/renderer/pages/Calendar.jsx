@@ -563,32 +563,59 @@ export default function Calendar() {
               </div>
 
               {/* Discipline coverage summary */}
-              {Object.keys(compliance.discCoverage || {}).length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '10px 0 4px' }}>
-                  {Object.entries(compliance.discCoverage).map(([disc, { planned, logged }]) => {
-                    const pct = planned > 0 ? logged / planned : 1
-                    const warn = pct < 0.75
-                    const pctLabel = planned > 0 ? `${Math.round(pct * 100)}%` : '—'
-                    return (
-                      <div key={disc} style={{
-                        display: 'flex', alignItems: 'center', gap: '6px',
-                        padding: '5px 10px', borderRadius: '6px',
-                        background: warn ? 'rgba(251,146,60,0.08)' : 'rgba(148,163,184,0.06)',
-                        border: `1px solid ${warn ? 'rgba(251,146,60,0.3)' : 'var(--border)'}`,
-                        fontSize: '12px',
+              {Object.keys(compliance.discCoverage || {}).length > 0 && (() => {
+                const totalLogged = Object.values(compliance.discCoverage).reduce((s, v) => s + v.logged, 0)
+                const totalPlanned = Object.values(compliance.discCoverage).reduce((s, v) => s + v.planned, 0)
+                const totalPct = totalPlanned > 0 ? Math.round(totalLogged / totalPlanned * 100) : null
+                return (
+                  <div style={{ padding: '10px 0 4px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      {Object.entries(compliance.discCoverage).map(([disc, { planned, logged }]) => {
+                        const pct = planned > 0 ? logged / planned : 1
+                        const warn = pct < 0.75
+                        const pctLabel = planned > 0 ? `${Math.round(pct * 100)}%` : '—'
+                        return (
+                          <div key={disc} style={{
+                            display: 'flex', alignItems: 'center', gap: '6px',
+                            padding: '5px 10px', borderRadius: '6px',
+                            background: warn ? 'rgba(251,146,60,0.08)' : 'rgba(148,163,184,0.06)',
+                            border: `1px solid ${warn ? 'rgba(251,146,60,0.3)' : 'var(--border)'}`,
+                            fontSize: '12px',
+                          }}>
+                            <span style={{ fontWeight: 600, color: DISC_COLOR[disc] || 'var(--text-primary)' }}>
+                              {DISC_LABEL[disc] || disc}
+                            </span>
+                            <span style={{ color: 'var(--text-muted)' }}>{logged}m / {planned}m</span>
+                            <span style={{ fontWeight: 600, color: warn ? 'var(--accent-amber)' : 'var(--accent-green)' }}>
+                              {pctLabel}{warn ? ' ⚠' : ''}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {totalPlanned > 0 && (
+                      <div style={{
+                        marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px',
+                        fontSize: '12px', color: 'var(--text-muted)',
                       }}>
-                        <span style={{ fontWeight: 600, color: DISC_COLOR[disc] || 'var(--text-primary)' }}>
-                          {DISC_LABEL[disc] || disc}
+                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Total hrs</span>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '14px' }}>
+                          {fmtVol(totalLogged)}
                         </span>
-                        <span style={{ color: 'var(--text-muted)' }}>{logged}m / {planned}m</span>
-                        <span style={{ fontWeight: 600, color: warn ? 'var(--accent-amber)' : 'var(--accent-green)' }}>
-                          {pctLabel}{warn ? ' ⚠' : ''}
-                        </span>
+                        <span>/ {fmtVol(totalPlanned)} planned</span>
+                        {totalPct !== null && (
+                          <span style={{
+                            fontWeight: 600,
+                            color: totalPct >= 90 ? 'var(--accent-green)' : totalPct >= 70 ? 'var(--accent-amber)' : '#ef4444',
+                          }}>
+                            {totalPct}%
+                          </span>
+                        )}
                       </div>
-                    )
-                  })}
-                </div>
-              )}
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* Session table with expandable rows */}
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
@@ -850,7 +877,7 @@ function TrainingHeatmap({ data, selectedWeek, onWeekClick }) {
                       {w.score !== null ? `${w.score}%` : '—'}
                     </div>
                     <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                      {fmtVol(w.volumeMin)}
+                      {fmtVol(w.volumeMin)}<span style={{ opacity: 0.5 }}> / {fmtVol(w.plannedMin)}</span>
                     </div>
                     {w.logged > 0 && (
                       <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '1px' }}>

@@ -146,6 +146,12 @@ function runMigrations() {
     db.prepare('ALTER TABLE logged_sessions ADD COLUMN swap_planned_discipline TEXT').run()
   }
 
+  // CN-5 #10: target_distance_m on planned_sessions
+  const psCols = db.prepare('PRAGMA table_info(planned_sessions)').all().map(c => c.name)
+  if (!psCols.includes('target_distance_m')) {
+    db.prepare('ALTER TABLE planned_sessions ADD COLUMN target_distance_m INTEGER').run()
+  }
+
   db.prepare(`
     CREATE TABLE IF NOT EXISTS body_composition (
       id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1266,6 +1272,7 @@ ipcMain.handle('stats:heatmap', () => {
     ).all(startStr, endStr)
 
     const volumeMin = loggedRows.reduce((s, r) => s + (r.duration || 0), 0)
+    const plannedMin = plannedRows.reduce((s, r) => s + (r.target_duration || 0), 0)
     const isFuture  = wk > currentWeek
     const isCurrent = wk === currentWeek
 
@@ -1278,6 +1285,7 @@ ipcMain.handle('stats:heatmap', () => {
       logged: loggedRows.length,
       score,
       volumeMin,
+      plannedMin,
       isFuture, isCurrent,
     })
   }
