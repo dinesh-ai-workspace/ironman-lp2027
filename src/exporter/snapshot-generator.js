@@ -3,6 +3,7 @@
 const path = require('path')
 const { computeScore, computeRecovery, computePainAlert, IMP_W } = require('../core/scoring')
 const { deriveBikeZones, deriveRunZones, deriveSwimPace } = require('../core/scoring/zones')
+const { SPEC_CHANGED_DATE } = require('./build-spec-generator')
 const { classifyDayType, computeWeightedTrainMin, calorieStatus, isComplete, hitsProtein, isLowCarb, computeWeeklyFueling, computeWeightTrend, formatFreshness, sevenDayAvg, CALORIE_RANGES } = require('../core/fueling')
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -75,9 +76,9 @@ function calcPace(disc, durationMin, distanceMi) {
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
-function generateSnapshot(db) {
-  const today = todayStr()
-  const wkNum = currentWeekNum()
+function generateSnapshot(db, options = {}) {
+  const today = options.today || todayStr()
+  const wkNum = Math.max(1, Math.floor((new Date(today + 'T00:00:00Z') - PLAN_START) / (7 * 24 * 60 * 60 * 1000)) + 1)
 
   // Helper: aggregate per-day fueling data for a date range and compute weekly status
   function computeWeeklyFuelingForRange(dbRef, startStr, endStr) {
@@ -181,12 +182,11 @@ function generateSnapshot(db) {
     const bikeA = discActual('bike'), bikeP = discPlanned('bike')
     const runA  = discActual('run'),  runP  = discPlanned('run')
 
-    // Strength done/planned
-    const strPlannedRows = plannedRows.filter(r => r.discipline === 'strength')
-    const strPlanned = strPlannedRows.length
-    const strDone = strPlannedRows.filter(p =>
-      loggedRows.some(l => l.discipline === 'strength' && l.date === p.date)
-    ).length
+    // Strength done/planned — read from Pass 4 matchDetails for consistency with session log
+    const strPlanned = plannedRows.filter(r => r.discipline === 'strength').length
+    const strDone = (scoreResult?.matchDetails ?? [])
+      .filter(d => d.plan.discipline === 'strength' && d.log != null)
+      .length
 
     // KEY done/total from matchDetails
     const keyDetails = scoreResult?.matchDetails?.filter(d => d.plan.importance === 'key') || []
@@ -250,12 +250,13 @@ function generateSnapshot(db) {
     bLines.push('|---|---|---|---|---|---|---|---|---|---|')
     for (const d of w.matchDetails) {
       const isExcused = d.flags.includes('excused')
-      const wt = isExcused ? '—' : IMP_W[d.plan.importance] || 1
+      const isOptional = d.flags.includes('optional')
+      const wt = (isExcused || isOptional) ? '—' : IMP_W[d.plan.importance] || 1
       const ratio = d.pct != null ? Math.round(d.pct * 100) + '%' : '—'
       const creditPct = isExcused
         ? `excused (${d.log?.reason ?? 'excused'})`
-        : Math.round(d.credit * 100) + '%'
-      const pts = isExcused ? '—' : (IMP_W[d.plan.importance] * d.credit).toFixed(1)
+        : isOptional ? '—' : Math.round(d.credit * 100) + '%'
+      const pts = (isExcused || isOptional) ? '—' : (IMP_W[d.plan.importance] * d.credit).toFixed(1)
       const flags = d.flags.filter(f => f !== 'excused').join(', ') || (isExcused ? '—' : '—')
       const actualMin = d.log ? fmtInt(d.log.duration) : '—'
       bLines.push(`| ${d.plan.date} | ${d.plan.discipline} | ${d.plan.importance} | ${wt} | ${d.plan.target_duration} | ${actualMin} | ${ratio} | ${creditPct} | ${pts} | ${flags} |`)
@@ -280,75 +281,36 @@ function generateSnapshot(db) {
     SELECT *, reason, swap_planned_id, swap_planned_discipline FROM logged_sessions WHERE date>=? AND date<=? ORDER BY date, discipline
   `).all(since14, today)
 
-  // ── 3-pass matching (mirrors computeScore logic) ──────────────────────────
-  const impOrder = { key: 0, supporting: 1, optional: 2 }
+  // Derive session-log match data from computeScore (single implementation — A1 of spec D)
+  const swapMap14 = new Map()  // plan.id → { plan, log }
+  const matchMap14 = new Map() // plan.id → { plan, log }
+  const usedIds14 = new Set()  // original log ids consumed by any match
 
-  const usedIds14 = new Set()
-  const matchMap14 = new Map()
-
-  // Swap pre-pass: match swap logs to their specified planned sessions
-  const swapMap14 = new Map() // plan.id → { plan, log }
-  for (const l of logged14) {
-    if (l.reason === 'swapped' && l.swap_planned_id != null) {
-      const plan = planned14.find(p => p.id === l.swap_planned_id)
-      if (plan && !swapMap14.has(plan.id)) {
-        swapMap14.set(plan.id, { plan, log: l })
-        usedIds14.add(l.id)
+  {
+    let wk = wkNum
+    while (wk >= 1) {
+      const wkStart = weekStartFor(wk)
+      const wkEnd = dateAdd(wkStart, 6)
+      if (wkEnd < since14) break  // entirely before 14-day window — stop
+      const cutoff = wkEnd < today ? wkEnd : today
+      const pRows = planned14.filter(p => p.date >= wkStart && p.date <= wkEnd)
+      const lRows = logged14.filter(l => l.date >= wkStart && l.date <= wkEnd)
+      if (pRows.length > 0) {
+        const sr = computeScore(pRows, lRows, cutoff, { z2Ceilings, today })
+        if (sr) {
+          for (const d of sr.matchDetails) {
+            if (d.log == null) continue
+            for (const id of (d.log._ids || [d.log.id])) usedIds14.add(id)
+            if (d.flags.includes('swapped')) {
+              swapMap14.set(d.plan.id, { plan: d.plan, log: d.log })
+            } else {
+              matchMap14.set(d.plan.id, { plan: d.plan, log: d.log })
+            }
+          }
+        }
       }
+      wk--
     }
-  }
-
-  const hasEarlierPlan14 = new Set()
-  for (const l of logged14) {
-    const prev = dateAdd(l.date, -1)
-    const hasPrevPlan = planned14.some(p => p.discipline === l.discipline && p.date === prev)
-    const hasOwnPlan  = planned14.some(p => p.discipline === l.discipline && p.date === l.date)
-    if (hasPrevPlan && !hasOwnPlan) hasEarlierPlan14.add(l.id)
-  }
-
-  function days14(a, b) {
-    return Math.abs((new Date(a + 'T00:00:00Z') - new Date(b + 'T00:00:00Z')) / 86400000)
-  }
-  function pickBest14(plan, candidates, crossDay = false) {
-    return candidates.reduce((best, l) => {
-      if (crossDay) {
-        const dDist = days14(l.date, plan.date)
-        const bDist = days14(best.date, plan.date)
-        if (dDist !== bDist) return dDist < bDist ? l : best
-        const ld = l.duration || 0, bd2 = best.duration || 0
-        if (ld !== bd2) return ld > bd2 ? l : best
-      } else {
-        const dd = Math.abs((l.duration||0) - plan.target_duration)
-        const bd2 = Math.abs((best.duration||0) - plan.target_duration)
-        if (dd !== bd2) return dd < bd2 ? l : best
-      }
-      if (l.date !== best.date) return l.date < best.date ? l : best
-      return (l.id <= best.id) ? l : best
-    })
-  }
-
-  // Pass 1: same-day (skip swap-matched plans)
-  const sortedByImp14 = [...planned14].filter(p => !swapMap14.has(p.id)).sort((a, b) => {
-    const di = (impOrder[a.importance]??3) - (impOrder[b.importance]??3)
-    if (di !== 0) return di
-    if (a.date !== b.date) return a.date.localeCompare(b.date)
-    return b.target_duration - a.target_duration
-  })
-  for (const p of sortedByImp14) {
-    const cands = logged14.filter(l => l.discipline === p.discipline && !usedIds14.has(l.id) && l.date === p.date && !hasEarlierPlan14.has(l.id))
-    if (cands.length > 0) { const best = pickBest14(p, cands); usedIds14.add(best.id); matchMap14.set(p.id, { plan: p, log: best }) }
-  }
-  // Pass 2: cross-day, KEY, ±2 (skip swap-matched plans)
-  const keyP14 = planned14.filter(p => p.importance === 'key' && !matchMap14.has(p.id) && !swapMap14.has(p.id)).sort((a,b)=>a.date.localeCompare(b.date))
-  for (const p of keyP14) {
-    const cands = logged14.filter(l => l.discipline === p.discipline && !usedIds14.has(l.id) && days14(l.date, p.date) <= 2)
-    if (cands.length > 0) { const best = pickBest14(p, cands, true); usedIds14.add(best.id); matchMap14.set(p.id, { plan: p, log: best }) }
-  }
-  // Pass 3: cross-day, non-KEY, ±2 (skip swap-matched plans)
-  const nonKeyP14 = planned14.filter(p => p.importance !== 'key' && !matchMap14.has(p.id) && !swapMap14.has(p.id)).sort((a,b)=>{ if(a.date!==b.date) return a.date.localeCompare(b.date); return (impOrder[a.importance]??3)-(impOrder[b.importance]??3) })
-  for (const p of nonKeyP14) {
-    const cands = logged14.filter(l => l.discipline === p.discipline && !usedIds14.has(l.id) && days14(l.date, p.date) <= 2)
-    if (cands.length > 0) { const best = pickBest14(p, cands, true); usedIds14.add(best.id); matchMap14.set(p.id, { plan: p, log: best }) }
   }
 
   // Build session lines (planned) and extra lines (unplanned)
@@ -384,7 +346,7 @@ function generateSnapshot(db) {
     if (m) {
       const { log } = m
       const pct = p.target_duration > 0 ? (log.duration || 0) / p.target_duration : null
-      const dayDiff = days14(log.date, p.date)
+      const dayDiff = Math.abs((new Date(log.date + 'T00:00:00Z') - new Date(p.date + 'T00:00:00Z')) / 86400000)
       const isExcused = log.reason && EXCUSED_REASONS.has(log.reason)
       let status = '✓ matched'
       if (isExcused) status = `excused (${log.reason})`
@@ -603,8 +565,9 @@ function generateSnapshot(db) {
     "SELECT target_distance_m FROM planned_sessions WHERE plan_id=? AND discipline='swim' AND type='endurance_continuous' AND date>=? AND date<=? ORDER BY date LIMIT 1"
   ).get(planId, currWkStart, dateAdd(currWkStart, 6))
   const currWkTarget = currWkEnduranceSess?.target_distance_m ?? 100
-  const onTrack = bestUnbrokenM != null && bestUnbrokenM >= currWkTarget - 50 ? 'YES' : 'NO'
-  const swimContinuityLine = `Swim continuity: ${bestUnbrokenM != null ? bestUnbrokenM + 'm' : '—'} (best unbroken freestyle, last 30 days) | Week 12 gate: 1,000m | On track: ${onTrack}`
+  const swimContinuityLine = bestUnbrokenM != null
+    ? `Swim continuity: ${bestUnbrokenM}m (best unbroken freestyle, last 30 days) | Week 12 gate: 1,000m | On track: ${bestUnbrokenM >= currWkTarget - 50 ? 'YES' : 'NO'}`
+    : `Swim continuity: no unbroken swim recorded in last 30 days | Week 12 gate: 1,000m | On track: UNKNOWN`
 
   const activityRecords = [
     `Longest swim: ${longestSwim?.distance != null ? Math.round(longestSwim.distance * 1609.34) + ' m' : '—'}${longestSwim?.duration != null ? ' (' + fmtInt(longestSwim.duration) + ' min)' : ''} on ${longestSwim?.date ?? '—'}`,
@@ -837,7 +800,7 @@ function generateSnapshot(db) {
     ...(swimSwapAlert ? [swimSwapAlert, ''] : []),
     ...(stopLossHint ? [`> ⚠ **${stopLossHint}**`, ''] : []),
     '# IM_LP2027 Progress Snapshot',
-    `Generated: ${formatGeneratedAt()} | Plan ID ${planId} v${activePlan?.version ?? '?'} | DB: ${dbAbsPath} | Spec: v2.0 | Spec changed: 2026-10-05 | Wk ${wkNum} of ${TOTAL_PLAN_WEEKS} — ${phaseName}`,
+    `Generated: ${formatGeneratedAt()} | Plan ID ${planId} v${activePlan?.version ?? '?'} | DB: ${dbAbsPath} | Spec: v2.0 | Spec changed: ${SPEC_CHANGED_DATE} | Wk ${wkNum} of ${TOTAL_PLAN_WEEKS} — ${phaseName}`,
     `Next gate: ${nextGateStr}`,
     '',
     '## Data Freshness',

@@ -1,10 +1,13 @@
 'use strict'
 
+// Derived from latest changelog row — update this when adding changelog rows
+const SPEC_CHANGED_DATE = '2026-10-06'
+
 function generateBuildSpec() {
   return `# IM_LP2027 Plan Build Spec
 
 **Version:** 2.0
-**Last changed:** 2026-10-05
+**Last changed:** ${SPEC_CHANGED_DATE}
 **Source:** \`src/core/plan-generator/\` — do not edit Drive copy by hand
 
 ---
@@ -186,13 +189,16 @@ D4. Unplanned sessions appear in a separate "Extra Sessions (unplanned)" subsect
 
 D5. If unplanned sessions exceed 90 min in the current week, the snapshot adds: "Note: N min of unplanned activity this week — coach visibility."
 
-**3-pass greedy matching:**
+**4-pass greedy matching:**
 
 | Pass | Scope | Eligible sessions | Day window |
 |---|---|---|---|
 | 1 | Same-day, importance-first | All non-optional | 0 days |
 | 2 | Cross-day, KEY only | KEY importance only (not same-day-only types) | ±2 days, same week |
 | 3 | Cross-day, supporting | supporting only (not same-day-only types) | ±2 days, same week |
+| 4 | Optional — same day first, then cross-day | optional only | same day first; then ±2 days, same week |
+
+Optional sessions (Pass 4) are excluded from both score numerator and denominator. "Str done/pl" in the weekly table reads from the same match result as the session log.
 
 **hasEarlierPlan guard:** A logged session on day D is excluded from Pass 1 if: (a) there is a same-discipline plan on D−1, AND (b) there is **no** same-discipline plan on D.
 
@@ -325,6 +331,13 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-05 | **CN-5 #8** — Session reason field (A1–A3): completed/life/equipment/illness/pain/coach-adjusted/other; stored in logged_sessions.reason. Excused sessions (B1–B4): illness/pain/coach-adjusted removed from numerator+denominator, no KEY-missed cap. Pain alert (C1–C3): ≥2 pain sessions in any 14-day window → alert at top of snapshot. Extra sessions (D1–D5): unplanned sessions in separate subsection; makeup-auth mechanism; D5 note if >90 min unplanned/week. Build spec D A1–D5 added; changelog updated |
 | 2026-10-05 | **CN-5 #9** — Swap reason: "swapped" added to session reason field; cross-discipline matching via swap_planned_id/swap_planned_discipline columns on logged_sessions. Swap constraints A3 enforced in Logger UI. Snapshot session log shows "covered by swap" (planned row) and "swapped (from→to)" (logged row). Swim swap note if any swim swapped this week; swim swap alert (≥2 in 14 days) at top of snapshot. Raw Garmin lines (RHR/HRV/Body Battery/Sleep Score) stripped from Athlete Notes section (already in Wellness table). Build spec D swap rules A1–C3 added; changelog updated |
 | 2026-10-05 | **CN-5 #10** — Swim continuity progression: target_distance_m column added to planned_sessions. Thu swims Wks 6–11 type→endurance_continuous with targets 200/300/400/450/600/750m; Wk 8 stays time_trial (400m TT); Wk 12 stays continuous_test (1,000m gate). Tue swims Wk 6+ note updated to bilateral breathing drill focus. Session log Note column shows "Target: Xm non-stop" for endurance_continuous swims. Snapshot Benchmarks gains "Swim continuity" line (best 30-day unbroken, Week 12 gate, On track Y/N). Build spec changelog updated |
+| 2026-10-06 | **CN-6 #1** — Pass 4 (optional sessions) added to 4-pass greedy matching: runs after Passes 1–3, uses unconsumed logs, same day first then ±2 days same Mon–Sun week, same discipline. Optional matches excluded from score numerator/denominator. "Str done/pl" weekly column and session log now read from same match result. Build spec section D renamed to 4-pass; Pass 4 row added |
+| 2026-10-06 | **CN-6 #2** — Plan version in snapshot header read from plans table (was previously showing stale v7; plans table updated to v8 for Plan ID 10) |
+| 2026-10-06 | **CN-6 #3** — Swim continuity fallback: when no qualifying swim exists in 30-day window, line reads exactly "Swim continuity: no unbroken swim recorded in last 30 days \| Week 12 gate: 1,000m \| On track: UNKNOWN" |
+| 2026-10-06 | **CN-7 #1** — Pass 1 eligibility changed to non-optional only. Optional sessions match only in Pass 4 (after Passes 1–3, on unconsumed logs). Build Spec D Pass 1 row updated to "All non-optional". Snapshot-generator.js Pass 1 (14-day matching) aligned to exclude optional. |
+| 2026-10-06 | **CN-7 #2** — Score Breakdown optional rows: Weight, Credit%, and Points columns show "—" instead of 1 / 0% / 0.0. Ratio still shown. Flags keep "optional" (and "missed" where applicable). Totals unchanged. |
+| 2026-10-06 | **CN-7 #3** — Build Spec "Last changed:" and snapshot header "Spec changed:" now derived from SPEC_CHANGED_DATE constant (latest changelog row date) in build-spec-generator.js; snapshot-generator.js imports and uses it. |
+| 2026-10-06 | **CN-8 #1** — Removed duplicate 4-pass matching logic from snapshot-generator.js (Pass 1–4, swap pre-pass, hasEarlierPlan guard, days14/pickBest14/wsFor14 helpers). Session Log, Score Breakdown, Weekly Scores and Str done/pl all now consume the match result from computeScore (src/core/scoring/index.js). No behaviour change. |
 
 ---
 
@@ -467,4 +480,4 @@ C5. Stop-loss hint: if the most recent completed week has Recovery Red AND weigh
 `
 }
 
-module.exports = { generateBuildSpec }
+module.exports = { generateBuildSpec, SPEC_CHANGED_DATE }

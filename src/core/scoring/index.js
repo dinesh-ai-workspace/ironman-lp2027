@@ -271,12 +271,11 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
 
   // Pass 3: cross-day, supporting, ±2 days, same week (A3), skip same-day-only types (A4)
   const nonKeyPlans = included
-    .filter(p => p.importance !== 'key' && !matchMap.has(p) &&
+    .filter(p => p.importance === 'supporting' && !matchMap.has(p) &&
       !SAME_DAY_ONLY_TYPES.has(p.type) && p.discipline !== 'race')
     .sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date)
-      const di = (impOrder[a.importance] ?? 3) - (impOrder[b.importance] ?? 3)
-      return di !== 0 ? di : b.target_duration - a.target_duration
+      return b.target_duration - a.target_duration
     })
   for (const p of nonKeyPlans) {
     const cands = mergedLogs.filter(l =>
@@ -286,6 +285,34 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
     )
     if (cands.length > 0) {
       const best = pickBest(p, cands, true)
+      useLog(best); matchMap.set(p, best)
+    }
+  }
+
+  // Pass 4: optional sessions — same day first, then ±2 days within same Mon–Sun week
+  const optionalPlans = plannedRows
+    .filter(p => p.importance === 'optional' && p.date <= cutoffDate)
+    .sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date)
+      return b.target_duration - a.target_duration
+    })
+  for (const p of optionalPlans) {
+    if (matchMap.has(p)) continue
+    const sameDayCands = mergedLogs.filter(l =>
+      l.discipline === p.discipline && !isUsed(l) && l.date === p.date
+    )
+    if (sameDayCands.length > 0) {
+      const best = pickBest(p, sameDayCands)
+      useLog(best); matchMap.set(p, best)
+      continue
+    }
+    const crossCands = mergedLogs.filter(l =>
+      l.discipline === p.discipline && !isUsed(l)
+        && daysDiff(l.date, p.date) <= 2
+        && getWeekStart(l.date) === getWeekStart(p.date)
+    )
+    if (crossCands.length > 0) {
+      const best = pickBest(p, crossCands, true)
       useLog(best); matchMap.set(p, best)
     }
   }
@@ -381,6 +408,17 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
   else if (keyMissed)       cap = 'KEY missed'
 
   const grade = applyGradeCap(baseGrade, cap)
+
+  // Include optional sessions in matchDetails (credit always 0, not scored)
+  for (const p of optionalPlans) {
+    const matched = matchMap.get(p)
+    if (matched) {
+      const pct = p.target_duration > 0 ? (matched.duration || 0) / p.target_duration : null
+      matchDetails.push({ plan: p, log: matched, pct, credit: 0, flags: ['optional'] })
+    } else if (!isPending(p)) {
+      matchDetails.push({ plan: p, log: null, pct: null, credit: 0, flags: ['optional', 'missed'] })
+    }
+  }
 
   const excusedCount = matchDetails.filter(d => d.flags.includes('excused')).length
   const unmatchedLogs = mergedLogs.filter(l => !isUsed(l))

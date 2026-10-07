@@ -502,3 +502,133 @@ test('S8: Wk 3 score unchanged at 64, grade C', () => {
   expect(result.grade).toBe('A')
   expect(result.matchDetails[0].flags).not.toContain('swapped')
 })
+
+// ─── CN-6 #1: Pass 4 — optional session matching ────────────────────────────
+
+test('P4-1: optional strength matched same day → in matchDetails with credit=0, score unaffected', () => {
+  const plans = [
+    makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-21' }),
+    makePlan({ id: 2, discipline: 'strength', type: 'strength', importance: 'optional', target_duration: 50, date: '2026-09-21' }),
+  ]
+  const logs = [
+    makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-09-21' }),
+    makeLog({ id: 2, discipline: 'strength', duration: 50, date: '2026-09-21' }),
+  ]
+  const result = computeScore(plans, logs, '2026-09-27')
+  expect(result.score).toBe(100)
+  const d = result.matchDetails.find(d => d.plan.id === 2)
+  expect(d).toBeTruthy()
+  expect(d.log).toBeTruthy()
+  expect(d.log.date).toBe('2026-09-21')
+  expect(d.credit).toBe(0)
+  expect(d.flags).toContain('optional')
+})
+
+test('P4-2: optional strength matched +1 day → matchDetails log.date +1, credit=0', () => {
+  const plans = [
+    makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-21' }),
+    makePlan({ id: 2, discipline: 'strength', type: 'strength', importance: 'optional', target_duration: 50, date: '2026-09-23' }),
+  ]
+  const logs = [
+    makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-09-21' }),
+    makeLog({ id: 2, discipline: 'strength', duration: 50, date: '2026-09-24' }),
+  ]
+  const result = computeScore(plans, logs, '2026-09-27')
+  expect(result.score).toBe(100)
+  const d = result.matchDetails.find(d => d.plan.id === 2)
+  expect(d).toBeTruthy()
+  expect(d.log.date).toBe('2026-09-24')
+  expect(d.credit).toBe(0)
+})
+
+test('P4-3: optional unmatched → matchDetails flags include optional and missed, score unchanged', () => {
+  const plans = [
+    makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-21' }),
+    makePlan({ id: 2, discipline: 'strength', type: 'strength', importance: 'optional', target_duration: 50, date: '2026-09-21' }),
+  ]
+  const logs = [makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-09-21' })]
+  const result = computeScore(plans, logs, '2026-09-27')
+  expect(result.score).toBe(100)
+  const d = result.matchDetails.find(d => d.plan.id === 2)
+  expect(d.log).toBeNull()
+  expect(d.flags).toContain('optional')
+  expect(d.flags).toContain('missed')
+})
+
+test('P4-4: optional cross-day outside week boundary → not matched', () => {
+  // Sep 27 (Sun Wk 2) plan; Sep 29 (Tue Wk 3) log — different week
+  const plans = [
+    makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-21' }),
+    makePlan({ id: 2, discipline: 'strength', type: 'strength', importance: 'optional', target_duration: 50, date: '2026-09-27' }),
+  ]
+  const logs = [
+    makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-09-21' }),
+    makeLog({ id: 2, discipline: 'strength', duration: 50, date: '2026-09-29' }),
+  ]
+  const result = computeScore(plans, logs, '2026-09-27')
+  const d = result.matchDetails.find(d => d.plan.id === 2)
+  expect(d.log).toBeNull()
+  expect(d.flags).toContain('missed')
+})
+
+test('P4-5: two optional sessions compete for same log — closer one wins, other unmatched', () => {
+  // Plans: Sep 23 and Sep 25 strength; Log: Sep 24 strength (1 day from each)
+  const plans = [
+    makePlan({ id: 1, discipline: 'run', importance: 'key', target_duration: 60, date: '2026-09-21' }),
+    makePlan({ id: 2, discipline: 'strength', type: 'strength', importance: 'optional', target_duration: 50, date: '2026-09-23' }),
+    makePlan({ id: 3, discipline: 'strength', type: 'strength', importance: 'optional', target_duration: 50, date: '2026-09-25' }),
+  ]
+  const logs = [
+    makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-09-21' }),
+    makeLog({ id: 2, discipline: 'strength', duration: 50, date: '2026-09-24' }),
+  ]
+  const result = computeScore(plans, logs, '2026-09-27')
+  expect(result.score).toBe(100)
+  const d2 = result.matchDetails.find(d => d.plan.id === 2)
+  const d3 = result.matchDetails.find(d => d.plan.id === 3)
+  // Sep 23 plan picks Sep 24 log (1 day diff); Sep 25 plan has no log left
+  expect(d2.log).toBeTruthy()
+  expect(d3.log).toBeNull()
+  expect(d3.flags).toContain('missed')
+})
+
+// ─── CN-7 #1: Pass 1 must exclude optional sessions ─────────────────────────
+
+test('CN7-1-T2: KEY Thu (60) + optional Sun (30) + single Sat log (60) → KEY matched (+2d), optional missed', () => {
+  // Week Sep 14–20: Thu=Sep 17 KEY run, Sun=Sep 20 optional run, log=Sat Sep 19
+  const plans = [
+    makePlan({ id: 1, discipline: 'run', importance: 'key',      target_duration: 60, date: '2026-09-17' }),
+    makePlan({ id: 2, discipline: 'run', importance: 'optional', target_duration: 30, date: '2026-09-20' }),
+  ]
+  const logs = [makeLog({ id: 1, discipline: 'run', duration: 60, date: '2026-09-19' })]
+  const result = computeScore(plans, logs, '2026-09-20')
+  const keyDetail = result.matchDetails.find(d => d.plan.id === 1)
+  const optDetail = result.matchDetails.find(d => d.plan.id === 2)
+  // KEY gets the Sat log via Pass 2 (±2d)
+  expect(keyDetail.log).toBeTruthy()
+  expect(keyDetail.log.date).toBe('2026-09-19')
+  expect(keyDetail.credit).toBe(1.0)
+  // Optional has no remaining log
+  expect(optDetail.log).toBeNull()
+  expect(optDetail.flags).toContain('missed')
+  expect(optDetail.flags).toContain('optional')
+})
+
+test('CN7-1-T3: optional Sun run (30), logged Sun (33), no other run plans → optional matched same-day', () => {
+  // KEY bike provides required non-optional session so computeScore doesn't early-return
+  const plans = [
+    makePlan({ id: 1, discipline: 'bike', importance: 'key',      target_duration: 60, date: '2026-09-14' }),
+    makePlan({ id: 2, discipline: 'run',  importance: 'optional', target_duration: 30, date: '2026-09-20' }),
+  ]
+  const logs = [
+    makeLog({ id: 1, discipline: 'bike', duration: 60, date: '2026-09-14' }),
+    makeLog({ id: 2, discipline: 'run',  duration: 33, date: '2026-09-20' }),
+  ]
+  const result = computeScore(plans, logs, '2026-09-20')
+  const optDetail = result.matchDetails.find(d => d.plan.id === 2)
+  expect(optDetail.log).toBeTruthy()
+  expect(optDetail.log.date).toBe('2026-09-20')
+  expect(optDetail.flags).toContain('optional')
+  expect(optDetail.flags).not.toContain('missed')
+  expect(optDetail.credit).toBe(0)
+})
