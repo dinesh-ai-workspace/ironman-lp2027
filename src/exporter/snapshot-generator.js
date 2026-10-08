@@ -293,8 +293,12 @@ function generateSnapshot(db, options = {}) {
       const wkEnd = dateAdd(wkStart, 6)
       if (wkEnd < since14) break  // entirely before 14-day window — stop
       const cutoff = wkEnd < today ? wkEnd : today
-      const pRows = planned14.filter(p => p.date >= wkStart && p.date <= wkEnd)
-      const lRows = logged14.filter(l => l.date >= wkStart && l.date <= wkEnd)
+      const pRows = db.prepare(
+        'SELECT id, discipline, type, target_duration, importance, date, target_intensity_zone FROM planned_sessions WHERE plan_id=? AND date>=? AND date<=? ORDER BY date, discipline'
+      ).all(planId, wkStart, wkEnd)
+      const lRows = db.prepare(
+        'SELECT *, reason, swap_planned_id, swap_planned_discipline FROM logged_sessions WHERE date>=? AND date<=? ORDER BY date, discipline'
+      ).all(wkStart, wkEnd)
       if (pRows.length > 0) {
         const sr = computeScore(pRows, lRows, cutoff, { z2Ceilings, today })
         if (sr) {

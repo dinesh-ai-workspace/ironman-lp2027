@@ -1,7 +1,7 @@
 'use strict'
 
 // Derived from latest changelog row — update this when adding changelog rows
-const SPEC_CHANGED_DATE = '2026-10-06'
+const SPEC_CHANGED_DATE = '2026-10-07'
 
 function generateBuildSpec() {
   return `# IM_LP2027 Plan Build Spec
@@ -338,6 +338,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-06 | **CN-7 #2** — Score Breakdown optional rows: Weight, Credit%, and Points columns show "—" instead of 1 / 0% / 0.0. Ratio still shown. Flags keep "optional" (and "missed" where applicable). Totals unchanged. |
 | 2026-10-06 | **CN-7 #3** — Build Spec "Last changed:" and snapshot header "Spec changed:" now derived from SPEC_CHANGED_DATE constant (latest changelog row date) in build-spec-generator.js; snapshot-generator.js imports and uses it. |
 | 2026-10-06 | **CN-8 #1** — Removed duplicate 4-pass matching logic from snapshot-generator.js (Pass 1–4, swap pre-pass, hasEarlierPlan guard, days14/pickBest14/wsFor14 helpers). Session Log, Score Breakdown, Weekly Scores and Str done/pl all now consume the match result from computeScore (src/core/scoring/index.js). No behaviour change. |
+| 2026-10-07 | **CN-9 #1** — Session Log full-week matching fix: per-week computeScore calls now query the DB directly for the full Mon–Sun range instead of filtering the pre-clipped 14-day array. Fixes wrong matches when since14 falls mid-week (e.g., Sep 24 mid-week caused logs Sep 21–23 to be excluded from matching). Extra Sessions = logs within window left unmatched by full-week matching. No scoring changes. |
 
 ---
 
