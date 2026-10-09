@@ -1289,7 +1289,7 @@ ipcMain.handle('stats:heatmap', () => {
       isFuture, isCurrent,
     })
   }
-  return { weeks, currentWeek }
+  return { weeks, currentWeek, todayStr }
 })
 
 // ─── IPC: stats:progress ─────────────────────────────────────────────────

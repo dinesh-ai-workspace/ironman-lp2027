@@ -276,8 +276,8 @@ function computeWeekCompliance(days, todayISO) {
     if (matched) {
       pct    = matched.duration / p.target_duration
       status = pct >= 0.85 ? 'done' : pct >= 0.50 ? 'partial' : 'low'
-    } else if (p.dateStr === todayISO) {
-      // Day isn't over — unmatched today's plans are still pending, not missed
+    } else if (daysDiff(p.dateStr, todayISO) <= 2) {
+      // A5: still within ±2-day matching window — may still be completed
       status = 'pending'
     }
     matchedRows.push({ dateStr: p.dateStr, date: p.date, planned: p, matched, status, pct })
@@ -400,13 +400,6 @@ export default function Calendar() {
     }).catch(() => setWeekOffset(0))
   }, [])
 
-  useEffect(() => {
-    if (noAPI) return
-    window.electronAPI.getHeatmap()
-      .then(data => setHeatmap(data))
-      .catch(console.error)
-  }, [])
-
   const displayMonday = weekOffset !== null ? addDays(baseMonday, weekOffset * 7) : baseMonday
   const displaySunday = addDays(displayMonday, 6)
   const weekStartStr = toISO(displayMonday)
@@ -424,9 +417,11 @@ export default function Calendar() {
     Promise.all([
       window.electronAPI.getPlannedSessions({ weekStartDate: weekStartStr, weekEndDate: weekEndStr }),
       window.electronAPI.getLoggedSessions({ startDate: weekStartStr, endDate: weekEndStr }),
-    ]).then(([planned, logs]) => {
+      window.electronAPI.getHeatmap(),
+    ]).then(([planned, logs, heatmapData]) => {
       setSessions(planned || [])
       setLogged(logs || [])
+      setHeatmap(heatmapData)
     }).catch(console.error).finally(() => setLoading(false))
   }, [weekOffset])
 
@@ -440,7 +435,10 @@ export default function Calendar() {
   })
 
   const todayISO = toISO(today)
-  const compliance = computeWeekCompliance(days, todayISO)
+  // Use ET date from main.js (via heatmap) so scoring cutoff matches the heatmap exactly.
+  // Renderer uses UTC (toISO), main.js uses ET — they diverge in the ~4h window near midnight ET.
+  const scoringTodayStr = heatmap?.todayStr ?? todayISO
+  const compliance = computeWeekCompliance(days, scoringTodayStr)
 
   return (
     <div>
