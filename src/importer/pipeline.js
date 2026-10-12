@@ -125,10 +125,7 @@ function normalizeRow(rawRow, mapping, preset) {
         // Garmin swim exports in meters (metric) or yards (imperial) — store as km
         distanceStored = Math.round((rawDistVal / 1000) * 1000) / 1000
       } else if (preset?.distanceUnit === 'mi') {
-        // Run: keep as miles (user preference); Bike: convert to km
-        distanceStored = discipline === 'run'
-          ? Math.round(rawDistVal * 100) / 100
-          : Math.round(rawDistVal * 1.60934 * 100) / 100
+        distanceStored = Math.round(rawDistVal * 100) / 100
       } else if (preset?.distanceUnit === 'km') {
         // Run: convert km → miles; Bike: keep as km
         distanceStored = discipline === 'run'
