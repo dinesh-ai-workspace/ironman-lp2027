@@ -269,6 +269,10 @@ function computeWeekCompliance(days, todayISO) {
     }
   }
 
+  // A5 finalization: once today is past the week's Sunday, no session can be pending
+  const weekEndStr = days.length > 0 ? days[days.length - 1].dateStr : todayISO
+  const weekIsFinalized = weekEndStr < todayISO
+
   const matchedRows = []
   for (const p of pastPlanned) {
     const matched = matchMap.get(p) ?? null
@@ -276,7 +280,7 @@ function computeWeekCompliance(days, todayISO) {
     if (matched) {
       pct    = matched.duration / p.target_duration
       status = pct >= 0.85 ? 'done' : pct >= 0.50 ? 'partial' : 'low'
-    } else if (daysDiff(p.dateStr, todayISO) <= 2) {
+    } else if (!weekIsFinalized && daysDiff(p.dateStr, todayISO) <= 2) {
       // A5: still within ±2-day matching window — may still be completed
       status = 'pending'
     }
