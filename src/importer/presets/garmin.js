@@ -6,7 +6,7 @@ module.exports = {
   columnMap: {
     date: 'Date',
     discipline: 'Activity Type',
-    duration: 'Time',
+    duration: 'Moving Time',
     distance: 'Distance',
     avg_hr: 'Avg HR',
     max_hr: 'Max HR',
