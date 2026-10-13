@@ -144,8 +144,8 @@ function normalizeRow(rawRow, mapping, preset) {
     const rawDistVal = parseNum(rawDistance, false)
     if (rawDistVal !== null && rawDistVal > 0) {
       if (discipline === 'swim') {
-        // Garmin swim exports in meters (metric) or yards (imperial) — store as km
-        distanceStored = Math.round((rawDistVal / 1000) * 1000) / 1000
+        // Garmin swim distance is in meters; store in miles like every other discipline
+        distanceStored = Math.round(rawDistVal * 0.000621371 * 1e6) / 1e6
       } else if (preset?.distanceUnit === 'mi') {
         distanceStored = Math.round(rawDistVal * 100) / 100
       } else if (preset?.distanceUnit === 'km') {
