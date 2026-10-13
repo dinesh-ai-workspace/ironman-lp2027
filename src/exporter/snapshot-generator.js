@@ -269,6 +269,43 @@ function generateSnapshot(db, options = {}) {
   // ─── Section 2: Session Log — Last 14 Days ────────────────────────────────
   const since14 = dateAdd(today, -13)
 
+  // CN-10 #7: pre-compute best unbroken metres per swim session
+  // Sources: (1) swim_lengths table (FIT data), (2) athlete-reported note "unbroken: Xm"
+  // Result: Map<session_id, { unbrokenM: number, source: 'fit'|'athlete' }>
+  const swimUnbrokenBySession = (() => {
+    const map = new Map()
+    const ltExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='swim_lengths'").get()
+    if (ltExists) {
+      // Group lengths by session, compute best unbroken freestyle run per session
+      const allLengths = db.prepare(
+        `SELECT sl.logged_session_id, sl.length_index, sl.length_type, sl.stroke,
+                sl.distance_m, ls.pool_length_m
+         FROM swim_lengths sl
+         JOIN logged_sessions ls ON sl.logged_session_id = ls.id
+         WHERE ls.discipline='swim'
+         ORDER BY sl.logged_session_id, sl.length_index`
+      ).all()
+      let curSid = null, run = 0, best = 0, poolLen = 25
+      for (const l of allLengths) {
+        if (l.logged_session_id !== curSid) { run = 0; best = 0; curSid = l.logged_session_id }
+        const isFreeActive = l.length_type === 'active' && (!l.stroke || l.stroke.toLowerCase().includes('free'))
+        if (isFreeActive) { poolLen = l.pool_length_m || l.distance_m || 25; run++ }
+        else run = 0
+        if (run * poolLen > best) best = run * poolLen
+        // Store best for this session (overwrite as we go)
+        if (best > 0) map.set(curSid, { unbrokenM: best, source: 'fit' })
+      }
+    }
+    // Athlete-reported fallback: notes containing "unbroken: Xm" (case-insensitive)
+    const allSwims = db.prepare("SELECT id, notes FROM logged_sessions WHERE discipline='swim'").all()
+    for (const s of allSwims) {
+      if (map.has(s.id)) continue  // FIT data takes priority
+      const m = (s.notes || '').match(/unbroken:\s*(\d+)\s*m/i)
+      if (m) map.set(s.id, { unbrokenM: parseInt(m[1]), source: 'athlete' })
+    }
+    return map
+  })()
+
   const planned14 = db.prepare(`
     SELECT ps.*, pb.phase
     FROM planned_sessions ps
@@ -364,7 +401,18 @@ function generateSnapshot(db, options = {}) {
         avgHr: dash(log.avg_hr), powerPace: dash(log.avg_power),
         rpe: dash(log.rpe), status,
         reason: (log.reason && log.reason !== 'completed') ? log.reason : '—',
-        note: (p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes.slice(0,40) : (log.notes||'').slice(0,40)) || '—', _order: 0,
+        note: (() => {
+          const rawNote = p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes : (log.notes || '')
+          // Strip any existing "unbroken: Xm" token from the raw note to avoid duplication
+          const cleanBase = rawNote.replace(/[;,]?\s*unbroken:\s*\d+\s*m\b[^;,]*/gi, '').trim().replace(/^[;,]\s*/, '').trim()
+          let n = cleanBase.slice(0, 40) || '—'
+          if (p.discipline === 'swim' && swimUnbrokenBySession.has(log.id)) {
+            const ub = swimUnbrokenBySession.get(log.id)
+            const ubStr = ub.source === 'athlete' ? `unbroken: ${ub.unbrokenM}m (athlete-reported)` : `unbroken: ${ub.unbrokenM}m`
+            n = n === '—' ? ubStr : n + '; ' + ubStr
+          }
+          return n
+        })(), _order: 0,
       })
     } else if (p.date < today) {
       const missedNote = p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes.slice(0,40) : '—'
@@ -560,44 +608,32 @@ function generateSnapshot(db, options = {}) {
     "SELECT distance, duration, date FROM logged_sessions WHERE discipline='run' AND distance IS NOT NULL ORDER BY distance DESC LIMIT 1"
   ).get()
 
-  // Swim continuity progress (CN-10 #5): best unbroken freestyle from length-level data only
+  // Swim continuity progress (CN-10 #5/#7): best unbroken freestyle over last 30 days
+  // Uses swimUnbrokenBySession (pre-computed above): FIT data or athlete-reported fallback
   // On-track targets by week number (Wk 1–6 = 200m, 7 = 300, 8 = 400, 9 = 450, 10 = 600, 11 = 750, 12+ = 1000)
   const SWIM_CONT_TARGETS = [0, 200, 200, 200, 200, 200, 200, 300, 400, 450, 600, 750]
   const swimContTarget = wkNum <= 11 ? SWIM_CONT_TARGETS[wkNum] : 1000
 
-  const lengthTableExists = db.prepare(
-    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='swim_lengths'"
-  ).get()
-
-  let swimContM = null
-  if (lengthTableExists) {
-    const lengths30 = db.prepare(
-      `SELECT sl.session_id, sl.pool_length_m, sl.type AS ltype, sl.stroke, sl.length_num
-       FROM swim_lengths sl
-       JOIN logged_sessions ls ON sl.session_id = ls.id
-       WHERE ls.discipline='swim' AND ls.date >= ?
-       ORDER BY ls.date, sl.length_num`
-    ).all(since30)
-    let best = 0, run = 0, runPoolLen = 25, curSession = null
-    for (const l of lengths30) {
-      if (l.session_id !== curSession) { run = 0; curSession = l.session_id }
-      const isFreeActive = l.ltype === 'active' && (!l.stroke || l.stroke.toLowerCase().includes('free'))
-      if (isFreeActive) {
-        runPoolLen = l.pool_length_m || 25
-        run++
-      } else {
-        run = 0
+  // Find the max unbroken over all swim sessions in last 30 days
+  let swimContM = null, swimContSource = null
+  const swims30 = db.prepare(
+    "SELECT id, date FROM logged_sessions WHERE discipline='swim' AND date>=? ORDER BY date"
+  ).all(since30)
+  for (const s of swims30) {
+    if (swimUnbrokenBySession.has(s.id)) {
+      const ub = swimUnbrokenBySession.get(s.id)
+      if (swimContM === null || ub.unbrokenM > swimContM) {
+        swimContM = ub.unbrokenM
+        swimContSource = ub.source
       }
-      const runM = run * runPoolLen
-      if (runM > best) best = runM
     }
-    if (best > 0) swimContM = best
   }
 
   let swimContinuityLine
   if (swimContM != null) {
     const onTrack = swimContM >= swimContTarget ? 'YES' : 'NO'
-    swimContinuityLine = `Swim continuity: ${swimContM}m (best unbroken freestyle, last 30 days) | Week 12 gate: 1,000m | On track: ${onTrack}`
+    const srcNote = swimContSource === 'athlete' ? ' (athlete-reported)' : ''
+    swimContinuityLine = `Swim continuity: ${swimContM}m (best unbroken freestyle${srcNote}, last 30 days) | Week 12 gate: 1,000m | On track: ${onTrack}`
   } else {
     swimContinuityLine = `Swim continuity: UNKNOWN (no length data, last 30 days) | Week 12 gate: 1,000m | On track: UNKNOWN`
   }
@@ -615,23 +651,67 @@ function generateSnapshot(db, options = {}) {
     'SELECT * FROM readiness_gates WHERE plan_id=? ORDER BY week_num ASC, discipline ASC'
   ).all(planId)
 
+  // CN-10 #6: test-based gates show only test-matched sessions + benchmarks
+  const TEST_GATE_METRICS = new Set(['baselines_w5', 'continuous_1000m', 'ftp_retest_w16', 'continuous_1500m', 'run_tt_retest_w24'])
+
   function gateEvidence(g) {
+    const gateWeekStart = weekStartFor(g.week_num)
+    const gateWeekEnd = dateAdd(gateWeekStart, 6)
+
+    if (g.metric === 'baselines_w5') {
+      // FTP: check bike_power20_w + bike_hr20_bpm benchmarks in gate week
+      const ftpPow = db.prepare("SELECT value FROM athlete_benchmarks WHERE metric='bike_power20_w' AND date>=? AND date<=? ORDER BY date DESC LIMIT 1").get(gateWeekStart, gateWeekEnd)
+      const ftpHr  = db.prepare("SELECT value FROM athlete_benchmarks WHERE metric='bike_hr20_bpm' AND date>=? AND date<=? ORDER BY date DESC LIMIT 1").get(gateWeekStart, gateWeekEnd)
+      let ftpStr = 'not recorded'
+      if (ftpPow && ftpHr) {
+        const ftp = Math.floor(ftpPow.value * 0.95 + 0.5)
+        ftpStr = `recorded ${ftp} W`
+      }
+      // Swim 400m TT: swim_400m_min in gate week
+      const swimBm = db.prepare("SELECT value FROM athlete_benchmarks WHERE metric='swim_400m_min' AND date>=? AND date<=? ORDER BY date DESC LIMIT 1").get(gateWeekStart, gateWeekEnd)
+      let swimStr = 'not recorded'
+      if (swimBm) {
+        const totalSec = Math.round(swimBm.value * 60)
+        swimStr = `recorded ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')}`
+      }
+      // Run 30-min TT: run_tt_distance_mi in gate week
+      const runBm = db.prepare("SELECT value FROM athlete_benchmarks WHERE metric='run_tt_distance_mi' AND date>=? AND date<=? ORDER BY date DESC LIMIT 1").get(gateWeekStart, gateWeekEnd)
+      let runStr = 'not recorded'
+      if (runBm) runStr = `recorded ${runBm.value.toFixed(2)} mi`
+      return `FTP: ${ftpStr}; 400m swim TT: ${swimStr}; 30-min run TT: ${runStr}`
+    }
+
+    if (TEST_GATE_METRICS.has(g.metric)) {
+      // Find planned test sessions in gate week
+      const testPlanned = db.prepare(
+        "SELECT discipline, date FROM planned_sessions WHERE plan_id=? AND type IN ('ftp_test','time_trial','continuous_test') AND date>=? AND date<=? ORDER BY date"
+      ).all(planId, gateWeekStart, gateWeekEnd)
+      if (testPlanned.length === 0) return '—'
+      const parts = []
+      for (const ps of testPlanned) {
+        const matched = db.prepare(
+          "SELECT discipline, duration, date FROM logged_sessions WHERE discipline=? AND date>=? AND date<=? ORDER BY date"
+        ).all(ps.discipline, dateAdd(ps.date, -1), dateAdd(ps.date, 1))
+        for (const ls of matched) parts.push(`${ls.discipline} ${fmtInt(ls.duration)}min on ${ls.date}`)
+      }
+      if (parts.length === 0) return '—'
+      return parts.slice(0, 3).join('; ')
+    }
+
     if (g.discipline === 'swim') {
       // Longest single swim in gate week and prior week (m + min)
-      const gateWeekStart = weekStartFor(g.week_num)
       const priorWeekStart = weekStartFor(Math.max(1, g.week_num - 1))
       const longest = db.prepare(
         "SELECT distance, duration, date FROM logged_sessions WHERE discipline='swim' AND distance IS NOT NULL AND date>=? AND date<=? ORDER BY distance DESC LIMIT 1"
-      ).get(priorWeekStart, dateAdd(gateWeekStart, 6))
+      ).get(priorWeekStart, gateWeekEnd)
       if (longest) {
         const metres = longest.distance != null ? Math.round(longest.distance * 1609.34) : '—'
         return `${metres}m / ${fmtInt(longest.duration)}min on ${longest.date}`
       }
       return '—'
     }
+
     // multi / race: show relevant logged sessions in gate week range
-    const gateWeekStart = weekStartFor(g.week_num)
-    const gateWeekEnd = dateAdd(gateWeekStart, 6)
     const sessions = db.prepare(
       "SELECT discipline, duration, date FROM logged_sessions WHERE discipline IN ('swim','bike','run') AND date>=? AND date<=? ORDER BY date"
     ).all(gateWeekStart, gateWeekEnd)

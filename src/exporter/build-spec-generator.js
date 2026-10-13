@@ -117,7 +117,14 @@ Defined in \`src/core/plan-generator/index.js → buildReadinessGates()\`. Inser
 | 36 | multi | im_readiness_w36 | GREEN: 3,800 m swim + 5-h ride with 30-min brick + 150-min run, Wks 34–36 |
 | 38 | race | dress_rehearsal | GREEN: Swim 100 min → bike 300 min → run 90 min with race nutrition, no GI issues |
 
-**Gate ownership:** The app NEVER sets a gate to GREEN, YELLOW or RED. Only the coach does, via Coaching_Notes. The app fills an Evidence column with candidates (for swim gates: longest single swim in the gate week and prior week; for multi/race gates: relevant logged sessions). Status stays "pending" until the coach sets it.
+**Gate ownership:** The app NEVER sets a gate to GREEN, YELLOW or RED. Only the coach does, via Coaching_Notes. Status stays "pending" until the coach sets it.
+
+**Evidence column rules (CN-10 #6):**
+
+- **Test gates** (baselines_w5, continuous_1000m, ftp_retest_w16, continuous_1500m, run_tt_retest_w24): Evidence lists only logged sessions matched to planned sessions of type \`ftp_test\`, \`time_trial\`, or \`continuous_test\` in the gate week, plus Benchmarks entries for that week. No unplanned or non-test sessions appear.
+  - baselines_w5 format exactly: \`FTP: <recorded N W | not recorded>; 400m swim TT: <recorded mm:ss | not recorded>; 30-min run TT: <recorded X.XX mi | not recorded>\`
+- **Swim gates** (ow_continuous_3000m): longest single swim in gate week and prior week (m + min).
+- **Multi / race gates** (trajectory_review_w8, half_readiness_w26, him_tune_up_race, im_readiness_w36, dress_rehearsal): relevant logged sessions in gate week range (swim/bike/run, up to 3).
 
 **Failure actions are advisory only.** The app does not automatically modify the plan. The coach issues a Coaching_Notes file; the developer implements it.
 
@@ -357,6 +364,8 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-12 | **CN-10 #3** — Swim distances corrected: was raw_m/1000 (km, inflated ×1.609 when displayed). Converted all 11 swim rows from raw metres (raw_m × 0.000621371). Pipeline updated to store swim distance in miles. Longest swim and Swim continuity lines now show correct metres. AT1 invariant: snapshot metres = raw metres ±0 m for all 11 swims. |
 | 2026-10-12 | **CN-10 #4** — AT harness bug: CN-10 #1 AT3/AT7 were run against plan_id=1 (superseded) instead of plan_id=10 (active). Corrected AT3: plan=70 actual=87 124% credit=100% no overshoot. Corrected AT7 new: 35 D / 68 C / 69 C / 68 C; old: 35 D / 68 C / 64 C / 68 C. All future AT queries read plan_id from plans table. |
 | 2026-10-12 | **CN-10 #5** — Swim continuity: was using session total distance as proxy for "unbroken freestyle." Changed to use Garmin length-level data from \`swim_lengths\` table only. If no length data exists for last 30 days, line reads "UNKNOWN (no length data, last 30 days)" and On track = UNKNOWN. On-track targets by week added to Build Spec H (Wks 1–6=200m, Wk7=300, Wk8=400, Wk9=450, Wk10=600, Wk11=750, Wk12+=1000). Old fallback "no unbroken swim recorded" removed. |
+| 2026-10-12 | **CN-10 #6** — Gate evidence: test-based gates (baselines_w5, continuous_1000m, ftp_retest_w16, continuous_1500m, run_tt_retest_w24) now show only sessions matched to ftp_test/time_trial/continuous_test planned sessions in gate week + Benchmarks, not all sessions. baselines_w5 special format: FTP/swim TT/run TT each "recorded N / not recorded". Build Spec C gate evidence rules updated. |
+| 2026-10-12 | **CN-10 #7** — Swim length import (feature-freeze exception): \`swim_lengths\` table created (logged_session_id, length_index, length_type, stroke, distance_m, duration_s). \`fit-file-parser\` added; \`src/importer/fit-swim.js\` parses Garmin FIT length messages. Athlete-reported fallback: notes containing "unbroken: Xm" used when no FIT data. Session Log Note appends unbroken value. Swim continuity uses max of FIT and athlete-reported over last 30 days. All 11 current swims have no FIT file; athlete must download from Garmin Connect. Build Spec H updated. |
 
 ---
 
@@ -421,14 +430,20 @@ Input: time in mm:ss = T (converted to decimal minutes)
 
 **Pace per 100m** = T ÷ 4. Record only; no swim zones.
 
-### Swim Continuity (CN-10 #5)
+### Swim Continuity (CN-10 #5 / CN-10 #7)
 
-**Definition.** Best unbroken freestyle = the longest run of consecutive active freestyle lengths with no rest interval between them, taken from the Garmin length/lap records (\`swim_lengths\` table: session_id, pool_length_m, type, stroke, length_num). Use the pool length from the activity. Rest intervals and non-freestyle lengths break the run.
+**Definition.** Best unbroken freestyle = the longest run of consecutive active freestyle lengths with no idle length in between, taken from the Garmin length/lap records (\`swim_lengths\` table: logged_session_id, length_index, length_type, stroke, distance_m, duration_s). Use the pool length from \`logged_sessions.pool_length_m\`. Rest intervals (idle lengths) and non-freestyle lengths break the run.
+
+**Data sources (CN-10 #7):**
+1. **Measured (FIT):** \`swim_lengths\` rows imported via \`src/importer/fit-swim.js\` from Garmin FIT files. Takes priority over athlete-reported.
+2. **Athlete-reported (fallback):** if a swim session has no \`swim_lengths\` rows but its \`logged_sessions.notes\` contains the token \`unbroken: Xm\` (case-insensitive, integer metres), that value is used. Display appends \` (athlete-reported)\` to the source description.
+3. **Session Log Note** appends \`unbroken: Xm\` (measured) or \`unbroken: Xm (athlete-reported)\` for swim sessions that have a value. Swims with no data get no appended token.
+4. **Swims with no FIT file:** listed by date in the CN-10 #7 report so the athlete can download originals from Garmin Connect.
 
 **Display rules (snapshot Benchmarks line):**
 
-1. If any swim in the last 30 days has length-level data in \`swim_lengths\`, compute best unbroken metres and display: \`Swim continuity: Xm (best unbroken freestyle, last 30 days) | Week 12 gate: 1,000m | On track: YES/NO\`
-2. If no swim in the last 30 days has length-level data: \`Swim continuity: UNKNOWN (no length data, last 30 days) | Week 12 gate: 1,000m | On track: UNKNOWN\`
+1. If the best unbroken metres over the last 30 days is available (FIT or athlete-reported): \`Swim continuity: Xm (best unbroken freestyle [source], last 30 days) | Week 12 gate: 1,000m | On track: YES/NO\`
+2. If no source exists for any swim in the last 30 days: \`Swim continuity: UNKNOWN (no length data, last 30 days) | Week 12 gate: 1,000m | On track: UNKNOWN\`
 3. On track = YES if best unbroken metres ≥ the continuity target for the current plan week, otherwise NO.
 
 **On-track targets by week:**

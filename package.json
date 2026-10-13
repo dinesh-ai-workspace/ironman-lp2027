@@ -20,6 +20,7 @@
   "dependencies": {
     "better-sqlite3": "^13.0.3",
     "electron": "^44.2.0",
+    "fit-file-parser": "^6.2.2",
     "lucide-react": "^1.42.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

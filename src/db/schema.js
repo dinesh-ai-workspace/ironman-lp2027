@@ -172,6 +172,16 @@ function applySchema(db) {
       notes   TEXT NOT NULL DEFAULT '',
       UNIQUE(metric, date)
     );
+
+    CREATE TABLE IF NOT EXISTS swim_lengths (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      logged_session_id   INTEGER NOT NULL REFERENCES logged_sessions(id),
+      length_index        INTEGER NOT NULL,
+      length_type         TEXT NOT NULL CHECK(length_type IN ('active','idle')),
+      stroke              TEXT,
+      distance_m          INTEGER,
+      duration_s          REAL
+    );
   `);
 }
 
