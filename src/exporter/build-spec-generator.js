@@ -1,7 +1,7 @@
 'use strict'
 
 // Derived from latest changelog row — update this when adding changelog rows
-const SPEC_CHANGED_DATE = '2026-10-07'
+const SPEC_CHANGED_DATE = '2026-10-12'
 
 function generateBuildSpec() {
   return `# IM_LP2027 Plan Build Spec
@@ -275,6 +275,18 @@ C2. The logged session row shows "swapped (from→to)" in the Status column with
 
 C3. Swapped sessions are NOT shown in the Extra sessions subsection. They are shown inline with the planned sessions they replaced (two consecutive rows per swap).
 
+**Duration source (CN-10 #1, rules 1–5):**
+
+1. Import and store all three Garmin time fields on \`logged_sessions\`: \`moving_min\`, \`timer_min\` (Garmin "Time"), \`elapsed_min\`. Backfill every existing logged session from the raw source.
+2. \`duration_min\` (used for scoring, the weekly actual hours, fueling day-type, longest-session stats and gate evidence) is selected by type:
+   - bike and run (outdoor and indoor) → \`moving_min\`
+   - swim (pool and open water) → \`timer_min\`
+   - strength / other → \`timer_min\`
+   - planned types brick_run, race_simulation, race, and any multisport/triathlon activity → \`elapsed_min\`
+3. Fallback: if the selected field is null or 0, use \`timer_min\`, then \`elapsed_min\`. Add the flag \`dur-fallback\` to the Session Log Note column.
+4. Pace and speed always use the same minutes as \`duration_min\`.
+5. Past weeks are rescored automatically under the new durations. This is expected. Do not freeze the old scores.
+
 ---
 
 ## E. Snapshot — Data Freshness Block (CN-5 #3 Part A)
@@ -306,6 +318,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | Body fat | % | Scale = directional only; DEXA is ground truth |
 | HRV | ms | Garmin "Avg Overnight HRV" |
 | Body Battery | 0–100 | Garmin proprietary score |
+| Duration source | moving (bike/run), timer (swim/strength), elapsed (race/race_sim/brick) | Fallback with \`dur-fallback\` flag per CN-10 #1 rule 3 |
 
 ---
 
@@ -339,6 +352,8 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-06 | **CN-7 #3** — Build Spec "Last changed:" and snapshot header "Spec changed:" now derived from SPEC_CHANGED_DATE constant (latest changelog row date) in build-spec-generator.js; snapshot-generator.js imports and uses it. |
 | 2026-10-06 | **CN-8 #1** — Removed duplicate 4-pass matching logic from snapshot-generator.js (Pass 1–4, swap pre-pass, hasEarlierPlan guard, days14/pickBest14/wsFor14 helpers). Session Log, Score Breakdown, Weekly Scores and Str done/pl all now consume the match result from computeScore (src/core/scoring/index.js). No behaviour change. |
 | 2026-10-07 | **CN-9 #1** — Session Log full-week matching fix: per-week computeScore calls now query the DB directly for the full Mon–Sun range instead of filtering the pre-clipped 14-day array. Fixes wrong matches when since14 falls mid-week (e.g., Sep 24 mid-week caused logs Sep 21–23 to be excluded from matching). Extra Sessions = logs within window left unmatched by full-week matching. No scoring changes. |
+| 2026-10-12 | **CN-10 #1** — Duration source: three Garmin time fields (moving_min, timer_min, elapsed_min) added to logged_sessions and backfilled. duration_min selected by type: bike/run → moving, swim/strength/other → timer, race types → elapsed. Fallback to timer/elapsed with dur-fallback flag in Note. 5 run sessions rescored (shorter moving times). 5 indoor-cycling sessions flagged dur-fallback. Build spec D Duration source subsection + F Units row added. |
+| 2026-10-12 | **CN-10 #2** — km→mi history check: confirmed all 52 logged sessions with distance are stored in miles (0 FAIL). Permanent importer check added: distanceUnit must be km, m, or mi; any other value aborts import with error. |
 
 ---
 

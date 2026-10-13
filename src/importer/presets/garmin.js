@@ -7,6 +7,8 @@ module.exports = {
     date: 'Date',
     discipline: 'Activity Type',
     duration: 'Moving Time',
+    timer: 'Time',
+    elapsed: 'Elapsed Time',
     distance: 'Distance',
     avg_hr: 'Avg HR',
     max_hr: 'Max HR',

@@ -55,9 +55,12 @@ function parseCSV(content) {
 
 function normalizeRow(rawRow, mapping, preset) {
   try {
+    // CN-10 #1: read all three Garmin time fields; mapping.duration = Moving Time for Garmin
     const rawDate       = mapping.date       ? rawRow[mapping.date]       : null
     const rawDiscipline = mapping.discipline  ? rawRow[mapping.discipline] : null
-    const rawDuration   = mapping.duration    ? rawRow[mapping.duration]   : null
+    const rawMoving     = mapping.duration    ? rawRow[mapping.duration]   : null
+    const rawTimer      = mapping.timer       ? rawRow[mapping.timer]      : null
+    const rawElapsed    = mapping.elapsed     ? rawRow[mapping.elapsed]    : null
     const rawDistance   = mapping.distance    ? rawRow[mapping.distance]   : null
     const rawAvgHr      = mapping.avg_hr      ? rawRow[mapping.avg_hr]     : null
     const rawPower      = mapping.avg_power   ? rawRow[mapping.avg_power]  : null
@@ -67,7 +70,7 @@ function normalizeRow(rawRow, mapping, preset) {
     const rawElevation  = mapping.elevation_gain ? rawRow[mapping.elevation_gain] : null
     const rawPoolLength = mapping.pool_length_m  ? rawRow[mapping.pool_length_m]  : null
 
-    if (!rawDate || !rawDiscipline || !rawDuration) return null
+    if (!rawDate || !rawDiscipline) return null
 
     // Parse date — Garmin format: "2026-09-06 07:30:00"
     let dateStr = null
@@ -91,22 +94,41 @@ function normalizeRow(rawRow, mapping, preset) {
       else discipline = 'other'
     }
 
-    // Parse duration — handles HH:MM:SS, seconds, or minutes
-    let durationMin = null
-    if (rawDuration && rawDuration.trim() !== '--') {
-      const trimmed = rawDuration.trim()
-      const hmsMatch = trimmed.match(/^(\d+):(\d{2}):(\d{2})(\.\d+)?$/)
-      if (hmsMatch) {
-        durationMin = Math.round(parseInt(hmsMatch[1]) * 60 + parseInt(hmsMatch[2]) + parseInt(hmsMatch[3]) / 60)
-      } else {
-        const durVal = parseFloat(trimmed.replace(/,/g, ''))
-        if (!isNaN(durVal)) {
-          durationMin = preset?.durationUnit === 'seconds'
-            ? Math.round(durVal / 60)
-            : Math.round(durVal)
-        }
-      }
+    // Parse a raw time string into minutes (null if missing/blank/--, 0 if exactly 00:00:00)
+    function parseTimeMin(raw) {
+      if (!raw || raw.trim() === '--' || raw.trim() === '') return null
+      const t = raw.trim()
+      const hms = t.match(/^(\d+):(\d{2}):(\d{2})(\.\d+)?$/)
+      if (hms) return Math.round(parseInt(hms[1]) * 60 + parseInt(hms[2]) + parseInt(hms[3]) / 60)
+      const v = parseFloat(t.replace(/,/g, ''))
+      if (isNaN(v)) return null
+      return Math.round(preset?.durationUnit === 'seconds' ? v / 60 : v)
     }
+
+    const movingMin  = parseTimeMin(rawMoving)
+    const timerMin   = parseTimeMin(rawTimer)
+    const elapsedMin = parseTimeMin(rawElapsed)
+
+    // CN-10 #1 rule 2: select duration_min by discipline; rule 3: fallback with flag
+    let durationMin = null
+    let durFallback = false
+    const RACE_TYPES = new Set(['race', 'race_simulation', 'brick_run', 'multisport'])
+
+    if (!mapping.timer) {
+      // Legacy preset with single duration field — no three-field rules
+      durationMin = movingMin
+    } else if (RACE_TYPES.has(discipline)) {
+      if (elapsedMin) { durationMin = elapsedMin }
+      else { durationMin = timerMin || movingMin; durFallback = true }
+    } else if (discipline === 'bike' || discipline === 'run') {
+      if (movingMin) { durationMin = movingMin }
+      else { durationMin = timerMin || elapsedMin; durFallback = true }
+    } else {
+      // swim, strength, other → timer
+      if (timerMin) { durationMin = timerMin }
+      else { durationMin = elapsedMin || movingMin; durFallback = true }
+    }
+
     if (!durationMin) return null
 
     function parseNum(raw, isInt) {
@@ -153,17 +175,22 @@ function normalizeRow(rawRow, mapping, preset) {
     const environment  = discipline === 'swim' ? (isOpenWater ? 'open_water' : 'pool') : null
     const poolLengthM  = discipline === 'swim' && !isOpenWater ? parseNum(rawPoolLength, true) : null
 
+    const notes = (rawNotes || '') + (durFallback ? ' [dur-fallback]' : '')
+
     return {
       date: dateStr,
       discipline,
       duration: durationMin,
+      moving_min: movingMin,
+      timer_min: timerMin,
+      elapsed_min: elapsedMin,
       distance: distanceStored,
       avg_hr: parseNum(rawAvgHr, true),
       avg_cadence: parseNum(rawCadence, true),
       avg_power: parseNum(rawPower, true),
       normalized_power: parseNum(rawNP, true),
       max_power: parseNum(rawMaxPower, true),
-      notes: rawNotes || '',
+      notes,
       elevation_gain: parseNum(rawElevation, false),
       environment,
       pool_length_m: poolLengthM,
@@ -188,6 +215,12 @@ function isDuplicate(normalizedRow, existingSessionsForDate) {
 }
 
 function runImportPipeline({ filePath, preset, mappingOverrides = {}, db, dryRun = false }) {
+  // CN-10 #2: validate distance unit before processing anything
+  if (preset?.distanceUnit !== undefined && !['km', 'm', 'mi'].includes(preset.distanceUnit)) {
+    const err = `Unknown distance unit '${preset.distanceUnit}' — must be km, m, or mi. Import aborted.`
+    return { total: 0, valid: 0, invalid: 0, duplicates: 0, imported: 0, skipped_duplicates: 0, skipped_invalid: 0, batch_id: null, errors: [{ row: 0, reason: err }], sample: [] }
+  }
+
   const content = fs.readFileSync(filePath, 'utf8')
   const { rows } = parseCSV(content)
 
@@ -261,12 +294,14 @@ function runImportPipeline({ filePath, preset, mappingOverrides = {}, db, dryRun
   if (!dryRun && toInsert.length > 0) {
     const insertStmt = db.prepare(`
       INSERT INTO logged_sessions
-        (discipline, date, duration, distance, avg_hr, rpe, notes,
+        (discipline, date, duration, moving_min, timer_min, elapsed_min,
+         distance, avg_hr, rpe, notes,
          avg_power, normalized_power, avg_cadence, max_power,
          environment, pool_length_m, is_brick,
          source, import_batch_id)
       VALUES
-        (@discipline, @date, @duration, @distance, @avg_hr, @rpe, @notes,
+        (@discipline, @date, @duration, @moving_min, @timer_min, @elapsed_min,
+         @distance, @avg_hr, @rpe, @notes,
          @avg_power, @normalized_power, @avg_cadence, @max_power,
          @environment, @pool_length_m, @is_brick,
          @source, @import_batch_id)
@@ -278,6 +313,9 @@ function runImportPipeline({ filePath, preset, mappingOverrides = {}, db, dryRun
           discipline:        row.discipline,
           date:              row.date,
           duration:          row.duration,
+          moving_min:        row.moving_min    ?? null,
+          timer_min:         row.timer_min     ?? null,
+          elapsed_min:       row.elapsed_min   ?? null,
           distance:          row.distance      || null,
           avg_hr:            row.avg_hr        || null,
           rpe:               null,
