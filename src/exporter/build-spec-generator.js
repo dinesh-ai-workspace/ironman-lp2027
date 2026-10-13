@@ -356,6 +356,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-12 | **CN-10 #2** — km→mi history check: fixed bike and other-discipline (Golf/Walking/Hiking) distances that were inflated ×1.60934; swim distances were wrongly stored as raw_m/1000 (km) and are fixed under CN-10 #3. Permanent importer check added: distanceUnit must be km, m, or mi. |
 | 2026-10-12 | **CN-10 #3** — Swim distances corrected: was raw_m/1000 (km, inflated ×1.609 when displayed). Converted all 11 swim rows from raw metres (raw_m × 0.000621371). Pipeline updated to store swim distance in miles. Longest swim and Swim continuity lines now show correct metres. AT1 invariant: snapshot metres = raw metres ±0 m for all 11 swims. |
 | 2026-10-12 | **CN-10 #4** — AT harness bug: CN-10 #1 AT3/AT7 were run against plan_id=1 (superseded) instead of plan_id=10 (active). Corrected AT3: plan=70 actual=87 124% credit=100% no overshoot. Corrected AT7 new: 35 D / 68 C / 69 C / 68 C; old: 35 D / 68 C / 64 C / 68 C. All future AT queries read plan_id from plans table. |
+| 2026-10-12 | **CN-10 #5** — Swim continuity: was using session total distance as proxy for "unbroken freestyle." Changed to use Garmin length-level data from \`swim_lengths\` table only. If no length data exists for last 30 days, line reads "UNKNOWN (no length data, last 30 days)" and On track = UNKNOWN. On-track targets by week added to Build Spec H (Wks 1–6=200m, Wk7=300, Wk8=400, Wk9=450, Wk10=600, Wk11=750, Wk12+=1000). Old fallback "no unbroken swim recorded" removed. |
 
 ---
 
@@ -419,6 +420,28 @@ Input: avg HR of the last 20 min (bpm) = R
 Input: time in mm:ss = T (converted to decimal minutes)
 
 **Pace per 100m** = T ÷ 4. Record only; no swim zones.
+
+### Swim Continuity (CN-10 #5)
+
+**Definition.** Best unbroken freestyle = the longest run of consecutive active freestyle lengths with no rest interval between them, taken from the Garmin length/lap records (\`swim_lengths\` table: session_id, pool_length_m, type, stroke, length_num). Use the pool length from the activity. Rest intervals and non-freestyle lengths break the run.
+
+**Display rules (snapshot Benchmarks line):**
+
+1. If any swim in the last 30 days has length-level data in \`swim_lengths\`, compute best unbroken metres and display: \`Swim continuity: Xm (best unbroken freestyle, last 30 days) | Week 12 gate: 1,000m | On track: YES/NO\`
+2. If no swim in the last 30 days has length-level data: \`Swim continuity: UNKNOWN (no length data, last 30 days) | Week 12 gate: 1,000m | On track: UNKNOWN\`
+3. On track = YES if best unbroken metres ≥ the continuity target for the current plan week, otherwise NO.
+
+**On-track targets by week:**
+
+| Weeks | Target (m) |
+|---|---|
+| 1–6 | 200 |
+| 7 | 300 |
+| 8 | 400 |
+| 9 | 450 |
+| 10 | 600 |
+| 11 | 750 |
+| 12+ | 1,000 |
 
 ---
 

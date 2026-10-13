@@ -560,18 +560,47 @@ function generateSnapshot(db, options = {}) {
     "SELECT distance, duration, date FROM logged_sessions WHERE discipline='run' AND distance IS NOT NULL ORDER BY distance DESC LIMIT 1"
   ).get()
 
-  // Swim continuity progress (CN-5 #10)
-  const bestSwim30 = db.prepare(
-    "SELECT MAX(distance) as d FROM logged_sessions WHERE discipline='swim' AND distance IS NOT NULL AND date >= ?"
-  ).get(since30)
-  const bestUnbrokenM = bestSwim30?.d != null ? Math.round(bestSwim30.d * 1609.34) : null
-  const currWkEnduranceSess = db.prepare(
-    "SELECT target_distance_m FROM planned_sessions WHERE plan_id=? AND discipline='swim' AND type='endurance_continuous' AND date>=? AND date<=? ORDER BY date LIMIT 1"
-  ).get(planId, currWkStart, dateAdd(currWkStart, 6))
-  const currWkTarget = currWkEnduranceSess?.target_distance_m ?? 100
-  const swimContinuityLine = bestUnbrokenM != null
-    ? `Swim continuity: ${bestUnbrokenM}m (best unbroken freestyle, last 30 days) | Week 12 gate: 1,000m | On track: ${bestUnbrokenM >= currWkTarget - 50 ? 'YES' : 'NO'}`
-    : `Swim continuity: no unbroken swim recorded in last 30 days | Week 12 gate: 1,000m | On track: UNKNOWN`
+  // Swim continuity progress (CN-10 #5): best unbroken freestyle from length-level data only
+  // On-track targets by week number (Wk 1–6 = 200m, 7 = 300, 8 = 400, 9 = 450, 10 = 600, 11 = 750, 12+ = 1000)
+  const SWIM_CONT_TARGETS = [0, 200, 200, 200, 200, 200, 200, 300, 400, 450, 600, 750]
+  const swimContTarget = wkNum <= 11 ? SWIM_CONT_TARGETS[wkNum] : 1000
+
+  const lengthTableExists = db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='swim_lengths'"
+  ).get()
+
+  let swimContM = null
+  if (lengthTableExists) {
+    const lengths30 = db.prepare(
+      `SELECT sl.session_id, sl.pool_length_m, sl.type AS ltype, sl.stroke, sl.length_num
+       FROM swim_lengths sl
+       JOIN logged_sessions ls ON sl.session_id = ls.id
+       WHERE ls.discipline='swim' AND ls.date >= ?
+       ORDER BY ls.date, sl.length_num`
+    ).all(since30)
+    let best = 0, run = 0, runPoolLen = 25, curSession = null
+    for (const l of lengths30) {
+      if (l.session_id !== curSession) { run = 0; curSession = l.session_id }
+      const isFreeActive = l.ltype === 'active' && (!l.stroke || l.stroke.toLowerCase().includes('free'))
+      if (isFreeActive) {
+        runPoolLen = l.pool_length_m || 25
+        run++
+      } else {
+        run = 0
+      }
+      const runM = run * runPoolLen
+      if (runM > best) best = runM
+    }
+    if (best > 0) swimContM = best
+  }
+
+  let swimContinuityLine
+  if (swimContM != null) {
+    const onTrack = swimContM >= swimContTarget ? 'YES' : 'NO'
+    swimContinuityLine = `Swim continuity: ${swimContM}m (best unbroken freestyle, last 30 days) | Week 12 gate: 1,000m | On track: ${onTrack}`
+  } else {
+    swimContinuityLine = `Swim continuity: UNKNOWN (no length data, last 30 days) | Week 12 gate: 1,000m | On track: UNKNOWN`
+  }
 
   const activityRecords = [
     `Longest swim: ${longestSwim?.distance != null ? Math.round(longestSwim.distance * 1609.34) + ' m' : '—'}${longestSwim?.duration != null ? ' (' + fmtInt(longestSwim.duration) + ' min)' : ''} on ${longestSwim?.date ?? '—'}`,
