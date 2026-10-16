@@ -1,7 +1,7 @@
 'use strict'
 
 // Derived from latest changelog row — update this when adding changelog rows
-const SPEC_CHANGED_DATE = '2026-10-12'
+const SPEC_CHANGED_DATE = '2026-10-16'
 
 function generateBuildSpec() {
   return `# IM_LP2027 Plan Build Spec
@@ -21,7 +21,7 @@ function generateBuildSpec() {
 - Plan generator code changes (developer action)
 - Coach issues a Coaching_Notes file with a structural change; developer implements it
 
-**KEY swim = longest non-optional swim of the week (rule K1). Tie → later day. Exception Wk 5: Thu swim TT is KEY.**
+**KEY swim = longest non-optional swim of the week (rule K1). Tie → later day. Exception Wk 5: Fri swim TT is KEY.**
 
 **Weekly layout — Wks 1–14 (Mon = day 0):**
 
@@ -35,7 +35,7 @@ function generateBuildSpec() {
 | Sat | Long bike (KEY) |
 | Sun | Easy recovery run (optional Wks 1–5, supporting Wks 6–14) |
 
-**Gate tests (KEY, scheduled on Thu/Tue as shown):** Wk 8 Thu swim 40 min time_trial (400m TT); Wk 12 Thu swim 50 min continuous_test (1,000m); Wk 16 Wed bike 60 min ftp_test; Wk 20 Thu swim 70 min continuous_test (1,500m); Wk 24 Thu run 60 min time_trial (30-min TT); Wk 26 Tue swim 80 min continuous_test (2,000m); Wk 34 Tue swim 100 min continuous_test (3,000m); Wk 35 Tue swim 110 min (3,800m attempt).
+**Gate tests (KEY, scheduled on Thu/Tue as shown):** Wk 9 Thu swim 40 min time_trial (400m TT — moved from Wk 8 per CN-12 #1); Wk 12 Thu swim 50 min continuous_test (1,000m); Wk 16 Wed bike 60 min ftp_test; Wk 20 Thu swim 70 min continuous_test (1,500m); Wk 24 Thu run 60 min time_trial (30-min TT); Wk 26 Tue swim 80 min continuous_test (2,000m); Wk 34 Tue swim 100 min continuous_test (3,000m); Wk 35 Tue swim 110 min (3,800m attempt).
 
 **Weekly layout — Wks 15–28 (Mon = day 0):**
 
@@ -78,7 +78,8 @@ Tue/Wed/Thu swim + Fri OW swim maintained in all A/B weeks. Fri swim = open-wate
 - Wks 14–45: every 4th week × 0.63 (60–65% load rule)
 
 **Special weeks:**
-- **Week 5** (2026-10-12): Test week. Wed = FTP bike test 60 min (KEY). Thu = swim TT 40 min (KEY — K1 exception) + run TT 60 min (KEY). Sat = Z2 ride (unchanged).
+- **Week 5** (2026-10-12): Test week. Wed = Z2 indoor bike 60 min (supporting; FTP moved per CN-11 #1). Fri = swim TT 40 min (KEY — K1 exception; moved from Thu per CN-13 #1). Sat = FTP test 100 min (KEY, test + Z2). Sun = run TT 60 min (KEY; moved from Thu per CN-14 #1).
+- **Weeks 6–7** (2026-10-22 → 2026-11-01): Athlete travel. Swims/bikes optional; Wk 6 long run Sat 60 min. Wk 8 Thu swim TT moved to Wk 9 Thu (CN-12 #1).
 - **Week 18** (Sun 2027-01-17): Sprint/Olympic tune-up race. Short swim Monday, shake-out run Friday.
 - **Week 28** (Sat 2027-03-27): Half-Ironman tune-up race (Saturday). Short swim Tuesday, easy run Wednesday, race Saturday. Race target: 450 min.
 - **Week 38** (Sat 2027-06-05): Dress Rehearsal. Swim 100 min → T1 → Bike 300 min → T2 → Run 90 min back-to-back. Full race nutrition and gear.
@@ -239,7 +240,7 @@ Swim has no overshoot penalty — extra swim time is welcome on the limiter.
 - Any KEY session with 0% credit (missed or < 50% of plan) → grade ≤ B (cap: "KEY missed")
 - **K2:** If both caps apply, the Cap column shows "swim<75%; KEY missed" and the lower cap (C) wins.
 
-**K1 — KEY swim selection:** In every week with ≥1 non-optional swim, the longest non-optional swim is KEY; all others are supporting. Tie → later day in the week is KEY. Exceptions: Wk 5 Thu swim TT is KEY; race weeks 18, 28, 45 and Dress Rehearsal week 38 are unchanged.
+**K1 — KEY swim selection:** In every week with ≥1 non-optional swim, the longest non-optional swim is KEY; all others are supporting. Tie → later day in the week is KEY. Exceptions: Wk 5 Fri swim TT is KEY; race weeks 18, 28, 45 and Dress Rehearsal week 38 are unchanged.
 
 **Intensity check (Z2 sessions):** For KEY and supporting bike/run sessions with target zone Z2: if avg HR > (Z2 ceiling HR + 5 bpm), credit = credit × 0.6, flag = "too hard". Activated per discipline as soon as its Z2 ceiling HR exists (set after Week 5 tests). Snapshot shows: "Intensity check: active (run ceiling X bpm, bike ceiling Y bpm)" or "Intensity check: inactive (zones not set)".
 
@@ -366,6 +367,13 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-12 | **CN-10 #5** — Swim continuity: was using session total distance as proxy for "unbroken freestyle." Changed to use Garmin length-level data from \`swim_lengths\` table only. If no length data exists for last 30 days, line reads "UNKNOWN (no length data, last 30 days)" and On track = UNKNOWN. On-track targets by week added to Build Spec H (Wks 1–6=200m, Wk7=300, Wk8=400, Wk9=450, Wk10=600, Wk11=750, Wk12+=1000). Old fallback "no unbroken swim recorded" removed. |
 | 2026-10-12 | **CN-10 #6** — Gate evidence: test-based gates (baselines_w5, continuous_1000m, ftp_retest_w16, continuous_1500m, run_tt_retest_w24) now show only sessions matched to ftp_test/time_trial/continuous_test planned sessions in gate week + Benchmarks, not all sessions. baselines_w5 special format: FTP/swim TT/run TT each "recorded N / not recorded". Build Spec C gate evidence rules updated. |
 | 2026-10-12 | **CN-10 #7** — Swim length import (feature-freeze exception): \`swim_lengths\` table created (logged_session_id, length_index, length_type, stroke, distance_m, duration_s). \`fit-file-parser\` added; \`src/importer/fit-swim.js\` parses Garmin FIT length messages. Athlete-reported fallback: notes containing "unbroken: Xm" used when no FIT data. Session Log Note appends unbroken value. Swim continuity uses max of FIT and athlete-reported over last 30 days. All 11 current swims have no FIT file; athlete must download from Garmin Connect. Build Spec H updated. |
+| 2026-10-14 | **CN-11 #1** — Wk 5 FTP test moved Wed→Sat: Wed 2026-10-14 bike ftp_test KEY→technique_indoor supporting Z2 aerobic_base (CN-11 note). Sat 2026-10-17 bike endurance_z2 KEY→ftp_test KEY Z4 testing (15 min warm-up, 20 min all-out, Z2 cool-down to 100 min). Plan ID 10 edited in place; no version bump (direct DB edit). Build Spec A Special weeks Wk 5 updated. |
+| 2026-10-15 | **CN-13 #1** — Wk 5 swim TT moved Thu→Fri: Thu 2026-10-15 swim time_trial KEY→optional technique Z1 (note CN-13). Fri 2026-10-16 swim technique supporting→time_trial key Z2 testing 400m. K1 exception updated: Thu→Fri. Build Spec A/D K1 exception text updated. |
+| 2026-10-15 | **CN-14 #1** — Wk 5 run TT moved Thu→Sun: Thu 2026-10-15 run time_trial KEY→moved to Sun 2026-10-18 (zone Z4, same type/tier/duration). Wk 5 now: Wed Z2 bike (S), Fri swim TT KEY, Sat FTP test KEY, Sun run TT KEY. Build Spec A Special weeks Wk 5 updated (final). |
+| 2026-10-14 | **CN-12 #1** — India travel Oct 22–Nov 2: Wk 6 Thu long run moved to Sat (60 min); Wk 6 Thu swim, Fri swim, Sat bike → optional; K1 re-derived: Tue 2026-10-20 swim → KEY. Wk 7 all swims + bikes → optional; runs unchanged. Wk 8 Thu swim time_trial→technique Z2 (target_distance_m cleared); K1 confirms KEY. Wk 9 Thu swim endurance_continuous→time_trial 40 min Z3 target 400m supporting (K1: Tue+Fri 50 min win). Build Spec A gate tests Wk 8 TT→Wk 9; Special weeks Wks 6–7 added. |
+| 2026-10-16 | **CN-15 #1** — Wk 5 400m swim TT recorded 14:48 (3:42/100m), 2 wall stops; continuity 200m. Data entry only. |
+| 2026-10-16 | **CN-15 #2** — Wk 5 swim TT effort context: controlled/continuity-first (avg HR 115, max 139). Wk 9 Thu swim TT note updated: same protocol, record time/stops/unbroken. |
+| 2026-10-16 | **CN-15 #3** — FIT length data imported for 2026-10-16 swim; continuity now measured. |
 
 ---
 

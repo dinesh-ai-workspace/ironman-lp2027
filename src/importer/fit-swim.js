@@ -1,57 +1,48 @@
 'use strict'
 
 const fs = require('fs')
-const { readFitMessages } = require('fit-file-parser')
+const FitParser = require('fit-file-parser').default
 
 /**
  * Parse a Garmin FIT file and extract pool swim length records.
- * Returns { poolLengthM, lengths } where lengths is an array of:
+ * Returns { poolLengthM, lengths, sessionStartDate } where lengths is an array of:
  *   { length_index, length_type, stroke, distance_m, duration_s }
  * Returns null if the FIT file is not a pool swim activity.
  */
 function parseFitSwim(fitPath) {
   const buf = fs.readFileSync(fitPath)
-  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+  const parser = new FitParser({ force: false, speedUnit: 'km/h', lengthUnit: 'm', mode: 'list' })
 
-  let messages
-  try {
-    messages = readFitMessages(ab, { selectedMessages: ['session', 'length'] })
-  } catch {
-    return null
-  }
+  let result = null
+  parser.parse(buf.buffer, function(err, data) {
+    if (err) return
 
-  // Find pool swim session
-  const sessions = messages.filter(m => m.messageType === 'session')
-  const poolSession = sessions.find(s =>
-    s.sport === 'swimming' && (s.sub_sport === 'lap_swimming' || s.sub_sport === undefined)
-  )
-  if (!poolSession && sessions.length > 0 && !sessions.some(s => s.sport === 'swimming')) {
-    return null
-  }
+    const sessions = data.sessions || []
+    const poolSession = sessions.find(s =>
+      s.sport === 'swimming' && (s.sub_sport === 'lap_swimming' || s.sub_sport === undefined)
+    )
+    if (!poolSession && sessions.length > 0 && !sessions.some(s => s.sport === 'swimming')) return
 
-  // Pool length in metres (FIT stores in cm → divide by 100; some files store raw metres)
-  let poolLengthM = null
-  if (poolSession?.pool_length != null) {
-    const raw = poolSession.pool_length
-    poolLengthM = raw > 10 ? raw / 100 : raw  // >10 → cm scale, else metres
-  }
-  if (!poolLengthM) poolLengthM = 25  // default fallback
+    // Pool length in metres (FitParser returns decoded value, typically 25)
+    let poolLengthM = poolSession?.pool_length ?? 25
+    if (poolLengthM > 100) poolLengthM = poolLengthM / 100  // guard: cm → m
+    if (!poolLengthM) poolLengthM = 25
 
-  // Extract length messages
-  const lengthMsgs = messages.filter(m => m.messageType === 'length')
-  if (lengthMsgs.length === 0) return null
+    const lengthMsgs = data.lengths || []
+    if (lengthMsgs.length === 0) return
 
-  const lengths = lengthMsgs.map((l, idx) => ({
-    length_index: idx + 1,
-    length_type:  l.length_type === 'active' ? 'active' : 'idle',
-    stroke:       l.swim_stroke ?? null,
-    distance_m:   l.avg_stroke_distance != null
-                    ? Math.round(l.avg_stroke_distance * (l.total_strokes ?? 1))
-                    : (l.length_type === 'active' ? poolLengthM : 0),
-    duration_s:   l.total_elapsed_time ?? null,
-  }))
+    const lengths = lengthMsgs.map((l, idx) => ({
+      length_index: (l.message_index?.value ?? idx) + 1,
+      length_type:  l.length_type === 'active' ? 'active' : 'idle',
+      stroke:       l.swim_stroke ?? null,
+      distance_m:   l.length_type === 'active' ? poolLengthM : 0,
+      duration_s:   l.total_elapsed_time ?? null,
+    }))
 
-  return { poolLengthM, lengths }
+    result = { poolLengthM, lengths, sessionStartDate: poolSession?.start_time ?? null }
+  })
+
+  return result
 }
 
 /**
@@ -63,14 +54,20 @@ function importFitSwim(fitPath, db) {
   const result = parseFitSwim(fitPath)
   if (!result) return { error: 'not a pool swim FIT file' }
 
-  const { poolLengthM, lengths } = result
+  const { poolLengthM, lengths, sessionStartDate } = result
   if (lengths.length === 0) return { error: 'no length records in FIT file' }
 
-  // Derive date from FIT filename (Garmin names: YYYY-MM-DD-HH-MM-SS.fit)
+  // Derive date from FIT filename (Garmin names: YYYY-MM-DD-*.fit); fall back to session start_time
   const fnBase = require('path').basename(fitPath, '.fit').replace(/\.FIT$/i, '')
   const dateParts = fnBase.match(/(\d{4})-(\d{2})-(\d{2})/)
-  if (!dateParts) return { error: 'cannot derive date from filename: ' + fitPath }
-  const activityDate = `${dateParts[1]}-${dateParts[2]}-${dateParts[3]}`
+  let activityDate
+  if (dateParts) {
+    activityDate = `${dateParts[1]}-${dateParts[2]}-${dateParts[3]}`
+  } else if (sessionStartDate) {
+    activityDate = new Date(sessionStartDate).toISOString().slice(0, 10)
+  } else {
+    return { error: 'cannot derive date from filename or FIT session: ' + fitPath }
+  }
 
   // Find matching swim session (±0 day; if multiple, pick first)
   const session = db.prepare(

@@ -1,6 +1,6 @@
 'use strict'
 import React, { useState, useEffect } from 'react'
-import { sessionCredit, IMP_W } from '../../core/scoring'
+import { sessionCredit, IMP_W } from '../../core/scoring/browser'
 
 const DISC_COLOR = {
   swim: 'var(--swim)',
@@ -668,9 +668,10 @@ export default function Calendar() {
                     const r = item.row
                     const isKeyMiss = r.planned?.importance === 'key' && (r.status === 'missed' || r.status === 'low')
                     const isPending = r.status === 'pending'
+                    const isOptional = r.planned?.importance === 'optional'
                     const isOpen = expandedRow === i
                     const desc = r.planned ? WORKOUT_DESCRIPTIONS[`${r.planned.discipline}:${r.planned.type}`] : null
-                    const hasDetail = !!desc
+                    const hasDetail = !!desc || (isOptional && !!r.planned?.notes)
                     const rowBg = isOpen ? 'rgba(59,130,246,0.06)'
                       : isKeyMiss ? 'rgba(239,68,68,0.06)'
                       : isPending ? 'rgba(148,163,184,0.04)'
@@ -693,13 +694,16 @@ export default function Calendar() {
                     return (
                       <React.Fragment key={i}>
                         <tr
-                          style={{ background: rowBg, borderBottom: isOpen ? 'none' : '1px solid rgba(255,255,255,0.04)', cursor: hasDetail ? 'pointer' : 'default' }}
+                          style={{ background: rowBg, borderBottom: isOpen ? 'none' : '1px solid rgba(255,255,255,0.04)', cursor: hasDetail ? 'pointer' : 'default', opacity: isOptional ? 0.55 : 1 }}
                           onClick={() => hasDetail && setExpandedRow(isOpen ? null : i)}
                         >
                           <td style={{ padding: '10px 10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', fontSize: '12px' }}>
                             {formatShortDate(r.dateStr)}
                           </td>
-                          <td style={{ padding: '10px 10px' }}>
+                          <td
+                            style={{ padding: '10px 10px' }}
+                            title={isOptional && r.planned?.notes ? r.planned.notes : undefined}
+                          >
                             {r.planned ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                                 <span style={{ color: discColor, fontWeight: 600 }}>
@@ -711,6 +715,9 @@ export default function Calendar() {
                                 )}
                                 {r.planned.importance === 'key' && (
                                   <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent-blue)', background: 'rgba(59,130,246,0.15)', padding: '1px 5px', borderRadius: '4px' }}>KEY</span>
+                                )}
+                                {isOptional && (
+                                  <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', background: 'rgba(148,163,184,0.18)', padding: '1px 5px', borderRadius: '4px' }}>optional</span>
                                 )}
                                 {hasDetail && (
                                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '2px' }}>{isOpen ? '▲' : '▼'}</span>
@@ -745,7 +752,7 @@ export default function Calendar() {
                           <td style={{ padding: '10px 10px', fontWeight: 600, color: gapColor, fontSize: '12px' }}>{gapLabel}</td>
                           <td style={{ padding: '10px 10px' }}><StatusBadge status={r.status} /></td>
                         </tr>
-                        {isOpen && desc && (
+                        {isOpen && (desc || (isOptional && r.planned?.notes)) && (
                           <tr style={{ background: 'rgba(59,130,246,0.04)', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                             <td />
                             <td colSpan={4} style={{ padding: '0 10px 14px' }}>
@@ -754,23 +761,32 @@ export default function Calendar() {
                                 paddingLeft: '12px',
                                 marginTop: '4px',
                               }}>
-                                <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                                  {desc.goal}
-                                </div>
-                                <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.65, marginBottom: '8px' }}>
-                                  {desc.execution}
-                                </div>
-                                {WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`] && (
-                                  <button
-                                    className="btn btn-secondary"
-                                    style={{ fontSize: '11px', padding: '4px 10px' }}
-                                    onClick={e => {
-                                      e.stopPropagation()
-                                      window.electronAPI?.openExternal(WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`].url)
-                                    }}
-                                  >
-                                    ▶ {WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`].label}
-                                  </button>
+                                {isOptional && r.planned?.notes && (
+                                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: desc ? '10px' : '0', lineHeight: 1.5 }}>
+                                    {r.planned.notes}
+                                  </div>
+                                )}
+                                {desc && (
+                                  <>
+                                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                                      {desc.goal}
+                                    </div>
+                                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.65, marginBottom: '8px' }}>
+                                      {desc.execution}
+                                    </div>
+                                    {WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`] && (
+                                      <button
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: '11px', padding: '4px 10px' }}
+                                        onClick={e => {
+                                          e.stopPropagation()
+                                          window.electronAPI?.openExternal(WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`].url)
+                                        }}
+                                      >
+                                        ▶ {WORKOUT_LINKS[`${r.planned.discipline}:${r.planned.type}`].label}
+                                      </button>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             </td>
