@@ -1,7 +1,7 @@
 'use strict'
 
 // Derived from latest changelog row — update this when adding changelog rows
-const SPEC_CHANGED_DATE = '2026-10-16'
+const SPEC_CHANGED_DATE = '2026-10-17'
 
 function generateBuildSpec() {
   return `# IM_LP2027 Plan Build Spec
@@ -78,7 +78,7 @@ Tue/Wed/Thu swim + Fri OW swim maintained in all A/B weeks. Fri swim = open-wate
 - Wks 14–45: every 4th week × 0.63 (60–65% load rule)
 
 **Special weeks:**
-- **Week 5** (2026-10-12): Test week. Wed = Z2 indoor bike 60 min (supporting; FTP moved per CN-11 #1). Fri = swim TT 40 min (KEY — K1 exception; moved from Thu per CN-13 #1). Sat = FTP test 100 min (KEY, test + Z2). Sun = run TT 60 min (KEY; moved from Thu per CN-14 #1).
+- **Week 5** (2026-10-12): Test week. Wed = Z2 indoor bike 60 min (supporting; FTP moved per CN-11 #1). Fri = swim TT 40 min (KEY — K1 exception; moved from Thu per CN-13 #1). Sat = FTP test 100 min (KEY, test + Z2) — MISSED; rescheduled to Sun per CN-16 #1. Sun = bike FTP test 100 min (KEY; rescheduled from Sat, CN-16 #1). Run TT rescheduled to 2026-10-20 (Wk 6 Tue, CN-16 #1).
 - **Weeks 6–7** (2026-10-22 → 2026-11-01): Athlete travel. Swims/bikes optional; Wk 6 long run Sat 60 min. Wk 8 Thu swim TT moved to Wk 9 Thu (CN-12 #1).
 - **Week 18** (Sun 2027-01-17): Sprint/Olympic tune-up race. Short swim Monday, shake-out run Friday.
 - **Week 28** (Sat 2027-03-27): Half-Ironman tune-up race (Saturday). Short swim Tuesday, easy run Wednesday, race Saturday. Race target: 450 min.
@@ -374,6 +374,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-16 | **CN-15 #1** — Wk 5 400m swim TT recorded 14:48 (3:42/100m), 2 wall stops; continuity 200m. Data entry only. |
 | 2026-10-16 | **CN-15 #2** — Wk 5 swim TT effort context: controlled/continuity-first (avg HR 115, max 139). Wk 9 Thu swim TT note updated: same protocol, record time/stops/unbroken. |
 | 2026-10-16 | **CN-15 #3** — FIT length data imported for 2026-10-16 swim; continuity now measured. |
+| 2026-10-17 | **CN-16 #1** — Wk 5 baselines rescheduled: FTP to 2026-10-18, run TT to 2026-10-20 (replaces easy run). |
 
 ---
 
