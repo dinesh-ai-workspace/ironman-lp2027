@@ -118,9 +118,17 @@ function generateSnapshot(db, options = {}) {
     if (r.metric === 'bike_ceiling_hr' && z2Ceilings.bike == null) z2Ceilings.bike = r.value
     if (r.metric === 'run_ceiling_hr'  && z2Ceilings.run  == null) z2Ceilings.run  = r.value
   }
-  const intensityCheckLine = (z2Ceilings.bike != null || z2Ceilings.run != null)
-    ? `Intensity check: active (${[z2Ceilings.run != null ? `run ceiling ${z2Ceilings.run} bpm` : null, z2Ceilings.bike != null ? `bike ceiling ${z2Ceilings.bike} bpm` : null].filter(Boolean).join(', ')})`
-    : 'Intensity check: inactive (zones not set)'
+  let intensityCheckLine
+  if (z2Ceilings.bike != null || z2Ceilings.run != null) {
+    const parts = []
+    if (z2Ceilings.run  != null) parts.push(`run ceiling ${z2Ceilings.run} bpm`)
+    else if (z2Ceilings.bike != null) parts.push('run zones not set')
+    if (z2Ceilings.bike != null) parts.push(`bike ceiling ${z2Ceilings.bike} bpm`)
+    else if (z2Ceilings.run != null) parts.push('bike zones not set')
+    intensityCheckLine = `Intensity check: active (${parts.join('; ')})`
+  } else {
+    intensityCheckLine = 'Intensity check: inactive (zones not set)'
+  }
 
   // ── Active plan ──────────────────────────────────────────────────────────
   const activePlan = db.prepare(
@@ -398,7 +406,7 @@ function generateSnapshot(db, options = {}) {
         planMin: p.target_duration, actualMin: fmtInt(log.duration),
         dist: log.distance != null ? fmt2(log.distance) : '—',
         pace: calcPace(p.discipline, log.duration, log.distance),
-        avgHr: dash(log.avg_hr), powerPace: dash(log.avg_power),
+        avgHr: dash(log.avg_hr), powerPace: log.discipline === 'bike' && log.avg_power_w != null ? dash(log.avg_power_w) : dash(log.avg_power),
         rpe: dash(log.rpe), status,
         reason: (log.reason && log.reason !== 'completed') ? log.reason : '—',
         note: (() => {

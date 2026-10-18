@@ -175,6 +175,30 @@ function runMigrations() {
       UNIQUE(date, time)
     )
   `).run()
+
+  // CN-17 #1: bike_streams table + power columns on logged_sessions
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS bike_streams (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      logged_session_id INTEGER NOT NULL REFERENCES logged_sessions(id),
+      t_utc            TEXT NOT NULL,
+      power_w          REAL,
+      cadence_rpm      REAL,
+      hr_bpm           REAL,
+      power_source     TEXT NOT NULL DEFAULT 'keiser',
+      hr_source        TEXT
+    )
+  `).run()
+  const bsIdxRows = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_bike_streams_session'").all()
+  if (bsIdxRows.length === 0) {
+    db.prepare('CREATE INDEX idx_bike_streams_session ON bike_streams(logged_session_id)').run()
+  }
+  const lsCols3 = db.prepare('PRAGMA table_info(logged_sessions)').all().map(c => c.name)
+  if (!lsCols3.includes('avg_power_w'))      db.prepare('ALTER TABLE logged_sessions ADD COLUMN avg_power_w REAL').run()
+  if (!lsCols3.includes('best20_power_w'))   db.prepare('ALTER TABLE logged_sessions ADD COLUMN best20_power_w REAL').run()
+  if (!lsCols3.includes('best20_hr_bpm'))    db.prepare('ALTER TABLE logged_sessions ADD COLUMN best20_hr_bpm REAL').run()
+  if (!lsCols3.includes('best20_start_utc')) db.prepare('ALTER TABLE logged_sessions ADD COLUMN best20_start_utc TEXT').run()
+  if (!lsCols3.includes('power_source'))     db.prepare('ALTER TABLE logged_sessions ADD COLUMN power_source TEXT').run()
 }
 
 // ─── First-launch plan initialization ─────────────────────────────────────
