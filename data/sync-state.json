@@ -1,23 +1,23 @@
 {
   "snapshot": {
     "rclonePath": "drive: Claude-Ironman Training/IM_LP2027_Progress_Snapshot.md",
-    "lastSynced": "2026-10-18T23:55:02.145Z",
+    "lastSynced": "2026-11-16T02:22:25.899Z",
     "fileId": "1QzX8x-gvv3ADBflTaoKLHWq-KIftknrl",
-    "modifiedTime": "2026-10-18T23:55:02.183Z",
+    "modifiedTime": "2026-11-16T02:22:25.911Z",
     "owner": "dinu08@gmail.com"
   },
   "currentPlan": {
     "rclonePath": "drive: Claude-Ironman Training/IM_LP2027_Current_Plan.md",
-    "lastSynced": "2026-10-18T23:55:02.145Z",
+    "lastSynced": "2026-11-16T02:22:25.899Z",
     "fileId": "1Ru3zux4OyRW4YcmU8X-Jl9SdI3eggVsb",
-    "modifiedTime": "2026-10-18T23:55:37.001Z",
+    "modifiedTime": "2026-11-16T02:22:27.903Z",
     "owner": "dinu08@gmail.com"
   },
   "buildSpec": {
     "rclonePath": "drive: Claude-Ironman Training/IM_LP2027_Plan_Build_Spec.md",
-    "lastSynced": "2026-10-18T23:55:02.145Z",
+    "lastSynced": "2026-11-16T02:22:25.899Z",
     "fileId": "1ZOVdwqBVV-q07RT_z_qccX-GQyPrXEVm",
-    "modifiedTime": "2026-10-18T23:55:39.240Z",
+    "modifiedTime": "2026-11-16T02:22:29.246Z",
     "owner": "dinu08@gmail.com"
   },
   "processedCoachingNotes": [
@@ -52,13 +52,26 @@
     "Coaching_Notes_2026-10-16-3.md",
     "Coaching_Notes_2026-10-17.md",
     "Coaching_Notes_2026-10-18-2.md",
-    "Coaching_Notes_2026-10-18.md"
+    "Coaching_Notes_2026-10-18.md",
+    "Coaching_Notes_2026-10-18-3.md",
+    "Coaching_Notes_2026-10-18-4.md",
+    "Coaching_Notes_2026-10-18-5.md",
+    "Coaching_Notes_2026-10-18-6.md",
+    "Coaching_Notes_2026-10-18-7.md",
+    "Coaching_Notes_2026-10-19.md",
+    "Coaching_Notes_2026-11-03.md",
+    "Coaching_Notes_2026-11-09.md",
+    "Coaching_Notes_2026-11-09-2.md",
+    "Coaching_Notes_2026-11-13.md",
+    "Coaching_Notes_2026-11-15.md",
+    "Coaching_Notes_2026-11-15-2.md",
+    "Coaching_Notes_2026-11-15-3.md"
   ],
   "lastSyncError": null,
-  "lastSyncedAt": "2026-10-18T23:55:02.145Z",
+  "lastSyncedAt": "2026-11-16T02:22:25.899Z",
   "regression": {
     "planId": 10,
-    "maxSession": "2026-10-18",
-    "maxWellness": "2026-10-18"
+    "maxSession": "2026-11-15",
+    "maxWellness": "2026-11-15"
   }
 }

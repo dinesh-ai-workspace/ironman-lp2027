@@ -99,7 +99,7 @@ function generatePlanDoc(db) {
 
   const gateHeader = '| Wk | Discipline | Metric | Target | Status |\n|---|---|---|---|---|'
   const gateRows = gates.map(g =>
-    `| ${g.week_num} | ${g.discipline} | ${g.metric} | ${g.target_value} | ${g.status} |`
+    `| ${g.week_num} | ${g.discipline} | ${g.metric} | ${g.target_value} | ${g.status.toUpperCase()} |`
   ).join('\n')
 
   // All planned sessions (all 45 weeks)
@@ -184,7 +184,7 @@ function generatePlanDoc(db) {
         return a.discipline.localeCompare(b.discipline)
       })
       .map(s =>
-        `| ${dayName(s.date)} | ${s.date} | ${s.discipline} | ${s.type} | ${s.importance} | ${s.target_duration} | Z${s.target_intensity_zone} | ${(s.purpose || '').slice(0, 60)} | ${s.target_distance_m ?? '—'} | ${(s.notes || '').slice(0, 50) || '—'} |`
+        `| ${dayName(s.date)} | ${s.date} | ${s.discipline} | ${s.type} | ${s.importance} | ${s.target_duration} | Z${s.target_intensity_zone} | ${(s.purpose || '').slice(0, 60)} | ${s.target_distance_m ?? '—'} | ${(s.notes || '').slice(0, 120) || '—'} |`
       ).join('\n')
 
     weekSections.push([

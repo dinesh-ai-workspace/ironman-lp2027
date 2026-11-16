@@ -24,9 +24,12 @@ function parseFitSwim(fitPath) {
     if (!poolSession && sessions.length > 0 && !sessions.some(s => s.sport === 'swimming')) return
 
     // Pool length in metres (FitParser returns decoded value, typically 25)
-    let poolLengthM = poolSession?.pool_length ?? 25
-    if (poolLengthM > 100) poolLengthM = poolLengthM / 100  // guard: cm → m
-    if (!poolLengthM) poolLengthM = 25
+    let poolLengthM = poolSession?.pool_length ?? null
+    const poolLengthUnit = poolSession?.pool_length_unit ?? null
+    if (poolLengthM !== null) {
+      if (poolLengthM > 100) poolLengthM = poolLengthM / 100  // guard: cm → m
+      if (poolLengthUnit === 'yd' || poolLengthUnit === 'yards') poolLengthM = Math.round(poolLengthM * 0.9144 * 10000) / 10000
+    }
 
     const lengthMsgs = data.lengths || []
     if (lengthMsgs.length === 0) return
@@ -78,8 +81,18 @@ function importFitSwim(fitPath, db) {
   // Delete any existing lengths for this session and re-insert
   db.prepare('DELETE FROM swim_lengths WHERE logged_session_id=?').run(session.id)
 
-  // Update pool_length_m on the logged session
-  db.prepare('UPDATE logged_sessions SET pool_length_m=? WHERE id=?').run(poolLengthM, session.id)
+  // Update pool_length_m on the logged session, or flag unknown
+  if (poolLengthM !== null) {
+    db.prepare('UPDATE logged_sessions SET pool_length_m=? WHERE id=?').run(poolLengthM, session.id)
+  } else {
+    const cur = db.prepare('SELECT notes FROM logged_sessions WHERE id=?').get(session.id)
+    const existingNotes = cur?.notes || ''
+    if (!existingNotes.includes('pool-length-unknown')) {
+      db.prepare('UPDATE logged_sessions SET notes=? WHERE id=?').run(
+        existingNotes ? existingNotes + ' pool-length-unknown' : 'pool-length-unknown', session.id
+      )
+    }
+  }
 
   const insert = db.prepare(
     `INSERT INTO swim_lengths (logged_session_id, length_index, length_type, stroke, distance_m, duration_s)

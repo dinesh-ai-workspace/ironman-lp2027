@@ -57,6 +57,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // External links
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
+  // Heatmap cache invalidation
+  onHeatmapInvalidated: (callback) => {
+    const handler = (_event) => callback()
+    ipcRenderer.on('heatmap:invalidated', handler)
+    return () => ipcRenderer.removeListener('heatmap:invalidated', handler)
+  },
+
   // Fat-loss / Stop-loss
   logWeight: (date, weight) => ipcRenderer.invoke('stoploss:log-weight', { date, weight }),
   stopLossCheckinGet: (weekStartDate) => ipcRenderer.invoke('stoploss:checkin:get', weekStartDate),

@@ -128,10 +128,11 @@ const TEST_TYPES = new Set(['ftp_test', 'time_trial', 'continuous_test'])
  * @param {string} cutoffDate   YYYY-MM-DD upper bound (weekEnd for past weeks, today for current)
  * @param {Object} options
  * @param {Object} options.z2Ceilings  {bike: number|null, run: number|null}
+ * @param {Object} options.zonesDates  {bike: 'YYYY-MM-DD'|null, run: 'YYYY-MM-DD'|null} — first date zones were set per discipline
  * @param {string} options.today       actual current date (ET); defaults to cutoffDate
  */
 function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
-  const { z2Ceilings = {}, today = cutoffDate, makeupAuthorizations = [] } = options
+  const { z2Ceilings = {}, zonesDates = {}, today = cutoffDate, makeupAuthorizations = [] } = options
 
   // Exclude optional sessions
   const included = plannedRows.filter(p => p.importance !== 'optional' && p.date <= cutoffDate)
@@ -364,7 +365,7 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
           flags.push('overshoot')
         }
 
-        // A7: intensity check multiplies credit (overshoot × too hard = 0.8 × 0.6 = 0.48)
+        // A7: intensity check — only applies on/after the date zones were set (CN-19 #1)
         const ceiling = z2Ceilings[p.discipline]
         if (
           ceiling != null && matched.avg_hr != null &&
@@ -372,8 +373,13 @@ function computeScore(plannedRows, loggedRows, cutoffDate, options = {}) {
           p.target_intensity_zone === 2 &&
           matched.avg_hr > ceiling + 5
         ) {
-          credit = credit * 0.6
-          flags.push('too hard')
+          const zoneDate = zonesDates[p.discipline]
+          if (!zoneDate || p.date >= zoneDate) {
+            credit = credit * 0.6
+            flags.push('too hard')
+          } else {
+            flags.push('HR>ceiling (pre-zones)')
+          }
         }
       }
     } else {

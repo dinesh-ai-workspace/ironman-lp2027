@@ -13,6 +13,7 @@ const PLAN_START = new Date(PLAN_START_STR + 'T00:00:00Z')
 const TOTAL_PLAN_WEEKS = 45
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+const halfUp = n => Math.floor(n + 0.5)
 function fmt1(n) { return n == null ? '—' : n.toFixed(1) }
 function fmt2(n) { return n == null ? '—' : n.toFixed(2) }
 function fmtInt(n) { return n == null ? '—' : Math.round(n).toString() }
@@ -109,22 +110,27 @@ function generateSnapshot(db, options = {}) {
     throw new Error('DB path is not absolute after resolve: ' + dbAbsPath)
   }
 
-  // B3: read z2Ceilings for intensity check activation
+  // B3: read z2Ceilings + first zone date per discipline (CN-19 #1: forward-only intensity check)
   const ceilingRows = db.prepare(
-    "SELECT metric, value FROM athlete_benchmarks WHERE metric IN ('bike_ceiling_hr', 'run_ceiling_hr') ORDER BY date DESC"
+    "SELECT metric, value, date FROM athlete_benchmarks WHERE metric IN ('bike_ceiling_hr', 'run_ceiling_hr') ORDER BY date DESC"
   ).all()
   const z2Ceilings = {}
   for (const r of ceilingRows) {
     if (r.metric === 'bike_ceiling_hr' && z2Ceilings.bike == null) z2Ceilings.bike = r.value
     if (r.metric === 'run_ceiling_hr'  && z2Ceilings.run  == null) z2Ceilings.run  = r.value
   }
+  const zonesDates = {}
+  const runZoneBm  = db.prepare("SELECT MIN(date) as d FROM athlete_benchmarks WHERE metric='run_lasthr20_bpm'").get()
+  const bikeZoneBm = db.prepare("SELECT MIN(date) as d FROM athlete_benchmarks WHERE metric='bike_power20_w'").get()
+  if (runZoneBm?.d)  zonesDates.run  = runZoneBm.d
+  if (bikeZoneBm?.d) zonesDates.bike = bikeZoneBm.d
   let intensityCheckLine
   if (z2Ceilings.bike != null || z2Ceilings.run != null) {
     const parts = []
     if (z2Ceilings.run  != null) parts.push(`run ceiling ${z2Ceilings.run} bpm`)
     else if (z2Ceilings.bike != null) parts.push('run zones not set')
     if (z2Ceilings.bike != null) parts.push(`bike ceiling ${z2Ceilings.bike} bpm`)
-    else if (z2Ceilings.run != null) parts.push('bike zones not set')
+    else if (z2Ceilings.run != null) parts.push('bike HR zones not set')
     intensityCheckLine = `Intensity check: active (${parts.join('; ')})`
   } else {
     intensityCheckLine = 'Intensity check: inactive (zones not set)'
@@ -171,7 +177,7 @@ function generateSnapshot(db, options = {}) {
       'SELECT * FROM daily_wellness WHERE date>=? AND date<=? ORDER BY date ASC'
     ).all(startStr, endStr)
 
-    const scoreResult = computeScore(plannedRows, loggedRows, endStr, { z2Ceilings, today })
+    const scoreResult = computeScore(plannedRows, loggedRows, endStr, { z2Ceilings, zonesDates, today })
 
     // Volume
     const plannedMin = plannedRows.reduce((s, r) => s + (r.target_duration || 0), 0)
@@ -293,23 +299,28 @@ function generateSnapshot(db, options = {}) {
          WHERE ls.discipline='swim'
          ORDER BY sl.logged_session_id, sl.length_index`
       ).all()
-      let curSid = null, run = 0, best = 0, poolLen = 25
+      // CN-29 #2: break rules (a) idle/rest length, (b) non-freestyle, (c) lap boundary via idle record, (d) gap — idle records serve as break markers
+      let curSid = null, run = 0, best = 0, poolLen = 25, breaks = 0, wasActive = false
       for (const l of allLengths) {
-        if (l.logged_session_id !== curSid) { run = 0; best = 0; curSid = l.logged_session_id }
+        if (l.logged_session_id !== curSid) { run = 0; best = 0; breaks = 0; wasActive = false; curSid = l.logged_session_id }
         const isFreeActive = l.length_type === 'active' && (!l.stroke || l.stroke.toLowerCase().includes('free'))
-        if (isFreeActive) { poolLen = l.pool_length_m || l.distance_m || 25; run++ }
-        else run = 0
+        if (isFreeActive) { poolLen = l.pool_length_m || l.distance_m || 25; run++; wasActive = true }
+        else { if (wasActive) breaks++; run = 0; wasActive = false }
         if (run * poolLen > best) best = run * poolLen
-        // Store best for this session (overwrite as we go)
-        if (best > 0) map.set(curSid, { unbrokenM: best, source: 'fit' })
+        // Store best + breaks for this session (overwrite as we go)
+        if (best > 0) map.set(curSid, { unbrokenM: halfUp(best), breaks, source: 'fit' })
       }
     }
     // Athlete-reported fallback: notes containing "unbroken: Xm" (case-insensitive)
-    const allSwims = db.prepare("SELECT id, notes FROM logged_sessions WHERE discipline='swim'").all()
+    const allSwims = db.prepare("SELECT id, date, notes FROM logged_sessions WHERE discipline='swim'").all()
     for (const s of allSwims) {
       if (map.has(s.id)) continue  // FIT data takes priority
       const m = (s.notes || '').match(/unbroken:\s*(\d+)\s*m/i)
-      if (m) map.set(s.id, { unbrokenM: parseInt(m[1]), source: 'athlete' })
+      if (m) {
+        let ubM = parseInt(m[1])
+        if (s.date <= '2026-10-19') ubM = halfUp(ubM * 0.9144)
+        map.set(s.id, { unbrokenM: ubM, source: 'athlete' })
+      }
     }
     return map
   })()
@@ -327,9 +338,10 @@ function generateSnapshot(db, options = {}) {
   `).all(since14, today)
 
   // Derive session-log match data from computeScore (single implementation — A1 of spec D)
-  const swapMap14 = new Map()  // plan.id → { plan, log }
-  const matchMap14 = new Map() // plan.id → { plan, log }
-  const usedIds14 = new Set()  // original log ids consumed by any match
+  const swapMap14 = new Map()    // plan.id → { plan, log }
+  const matchMap14 = new Map()   // plan.id → { plan, log }
+  const pendingSet14 = new Set() // plan.id of sessions A5-pending (no log yet)
+  const usedIds14 = new Set()    // original log ids consumed by any match
 
   {
     let wk = wkNum
@@ -345,10 +357,13 @@ function generateSnapshot(db, options = {}) {
         'SELECT *, reason, swap_planned_id, swap_planned_discipline FROM logged_sessions WHERE date>=? AND date<=? ORDER BY date, discipline'
       ).all(wkStart, wkEnd)
       if (pRows.length > 0) {
-        const sr = computeScore(pRows, lRows, cutoff, { z2Ceilings, today })
+        const sr = computeScore(pRows, lRows, cutoff, { z2Ceilings, zonesDates, today })
         if (sr) {
           for (const d of sr.matchDetails) {
-            if (d.log == null) continue
+            if (d.log == null) {
+              if (d.flags.includes('pending')) pendingSet14.add(d.plan.id)
+              continue
+            }
             for (const id of (d.log._ids || [d.log.id])) usedIds14.add(id)
             if (d.flags.includes('swapped')) {
               swapMap14.set(d.plan.id, { plan: d.plan, log: d.log })
@@ -412,22 +427,28 @@ function generateSnapshot(db, options = {}) {
         note: (() => {
           const rawNote = p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes : (log.notes || '')
           // Strip any existing "unbroken: Xm" token from the raw note to avoid duplication
-          const cleanBase = rawNote.replace(/[;,]?\s*unbroken:\s*\d+\s*m\b[^;,]*/gi, '').trim().replace(/^[;,]\s*/, '').trim()
+          const cleanBase = rawNote
+            .replace(/[;,]?\s*unbroken:\s*\d+\s*m\b(?:[^;,]*(?:breaks:\s*\d+)?[^;,]*)?/gi, '')
+            .replace(/\s*\[\s*\]\s*/g, '')
+            .trim().replace(/^[;,]\s*/, '').trim()
           let n = cleanBase.slice(0, 40) || '—'
           if (p.discipline === 'swim' && swimUnbrokenBySession.has(log.id)) {
             const ub = swimUnbrokenBySession.get(log.id)
-            const ubStr = ub.source === 'athlete' ? `unbroken: ${ub.unbrokenM}m (athlete-reported)` : `unbroken: ${ub.unbrokenM}m`
+            let ubStr = ub.source === 'athlete'
+              ? `unbroken: ${ub.unbrokenM}m (athlete-reported)`
+              : `unbroken: ${ub.unbrokenM}m; breaks: ${ub.breaks}`
             n = n === '—' ? ubStr : n + '; ' + ubStr
           }
           return n
         })(), _order: 0,
       })
-    } else if (p.date < today) {
-      const missedNote = p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes.slice(0,40) : '—'
-      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '✗ missed', reason: '—', note: missedNote, _order: 0 })
-    } else if (p.date === today) {
+    } else if (pendingSet14.has(p.id)) {
+      // A5: session is within the ±2-day grace window — pending, not missed
       const pendingNote = p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes.slice(0,40) : '—'
       sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '⏳ pending', reason: '—', note: pendingNote, _order: 0 })
+    } else if (p.date <= today) {
+      const missedNote = p.type === 'endurance_continuous' && p.discipline === 'swim' && p.notes ? p.notes.slice(0,40) : '—'
+      sessionLines.push({ date: p.date, disc: p.discipline, tier: p.importance, planMin: p.target_duration, actualMin: '—', dist: '—', pace: '—', avgHr: '—', powerPace: '—', rpe: '—', status: '✗ missed', reason: '—', note: missedNote, _order: 0 })
     }
   }
 
@@ -439,7 +460,7 @@ function generateSnapshot(db, options = {}) {
       if (l.date >= currWkStart && l.date <= today) {
         unplannedMinCurrWk += (l.duration || 0)
       }
-      extraLines.push({ date: l.date, disc: l.discipline, dur: fmtInt(l.duration), dist: l.distance != null ? fmt2(l.distance) : '—', pace: calcPace(l.discipline, l.duration, l.distance), avgHr: dash(l.avg_hr), rpe: dash(l.rpe), note: (l.notes||'').slice(0,40)||'—' })
+      extraLines.push({ date: l.date, disc: l.discipline, dur: fmtInt(l.duration), dist: l.distance != null ? fmt2(l.distance) : '—', pace: calcPace(l.discipline, l.duration, l.distance), avgHr: dash(l.avg_hr), rpe: dash(l.rpe), note: ((l.notes||'').replace(/\s*\[\s*\]\s*/g, '').trim().slice(0,40))||'—' })
     }
   }
 
@@ -550,36 +571,79 @@ function generateSnapshot(db, options = {}) {
 
   const power20raw = bm('bike_power20_w')
   const hr20raw    = bm('bike_hr20_bpm')
-  if (power20raw != null && hr20raw != null) {
-    const bz = deriveBikeZones(power20raw, hr20raw)
+  if (power20raw != null) {
+    const bz       = hr20raw != null ? deriveBikeZones(power20raw, hr20raw) : null
     const bikeDate = latestBenchmarks['bike_power20_w']?.date ?? '—'
-    const pZ = bz.powerZones
-    const hZ = bz.bikeHrZones
-    benchSections.push([
+    const benchBm  = latestBenchmarks['bike_power20_w']
+    const source   = benchBm?.method ?? 'auto: keiser'
+    const ftp      = halfUp(power20raw * 0.95)
+
+    // 20-min window offset from session stream start
+    const windowRow = db.prepare(`
+      SELECT ls.best20_start_utc, ls.best20_power_w, MIN(bs.t_utc) AS streamStart
+      FROM logged_sessions ls
+      JOIN bike_streams bs ON ls.id = bs.logged_session_id
+      WHERE ls.date = ? AND ls.discipline = 'bike'
+      GROUP BY ls.id LIMIT 1
+    `).get(bikeDate)
+    let windowLine = null
+    if (windowRow?.best20_start_utc && windowRow?.streamStart) {
+      const offsetMs  = new Date(windowRow.best20_start_utc) - new Date(windowRow.streamStart)
+      const offsetMin = Math.floor(offsetMs / 60000)
+      const offsetSec = Math.round((offsetMs % 60000) / 1000)
+      windowLine = `20-min window: start +${offsetMin}:${String(offsetSec).padStart(2, '0')}, P = ${windowRow.best20_power_w} W`
+    }
+
+    const lthrLine = bz
+      ? `**FTP: ${bz.ftp} W** | **Bike LTHR: ${bz.bikeLthr} bpm** | **Z2 ceiling: ${bz.bikeCeiling} bpm**`
+      : `**FTP: ${ftp} W** | **Bike LTHR: — (HR incomplete)**`
+
+    const protocolNote = benchBm?.notes && benchBm.notes !== 'HR incomplete' ? benchBm.notes : null
+    const lines = [
       `### Bike FTP Test (${bikeDate})`,
-      `- 20-min avg power: ${power20raw} W | 20-min avg HR: ${hr20raw} bpm`,
-      `- **FTP: ${bz.ftp} W** | **Bike LTHR: ${bz.bikeLthr} bpm** | **Z2 ceiling: ${bz.bikeCeiling} bpm**`,
+      windowLine ? `- ${windowLine}` : null,
+      `- ${lthrLine}`,
+      `- Source: ${source}`,
+      protocolNote ? `- ${protocolNote}` : null,
       '',
-      '| Zone | Power (W) | Bike HR (bpm) |',
-      '|---|---|---|',
-      `| Z1 | < ${pZ.z2[0]} | < ${hZ.z2[0]} |`,
-      `| Z2 | ${pZ.z2[0]}–${pZ.z2[1]} | ${hZ.z2[0]}–${hZ.z2[1]} |`,
-      `| Z3 | ${pZ.z3[0]}–${pZ.z3[1]} | ${hZ.z3[0]}–${hZ.z3[1]} |`,
-      `| Z4 | ${pZ.z4[0]}–${pZ.z4[1]} | ${hZ.z4[0]}–${hZ.z4[1]} |`,
-      `| Z5 | ≥ ${pZ.z5min} | ≥ ${hZ.z5min} |`,
-    ].join('\n'))
+    ].filter(l => l !== null)
+
+    if (bz) {
+      const pZ = bz.powerZones
+      const hZ = bz.bikeHrZones
+      lines.push('| Zone | Power (W) | Bike HR (bpm) |', '|---|---|---|',
+        `| Z1 | < ${pZ.z2[0]} | < ${hZ.z2[0]} |`,
+        `| Z2 | ${pZ.z2[0]}–${pZ.z2[1]} | ${hZ.z2[0]}–${hZ.z2[1]} |`,
+        `| Z3 | ${pZ.z3[0]}–${pZ.z3[1]} | ${hZ.z3[0]}–${hZ.z3[1]} |`,
+        `| Z4 | ${pZ.z4[0]}–${pZ.z4[1]} | ${hZ.z4[0]}–${hZ.z4[1]} |`,
+        `| Z5 | ≥ ${pZ.z5min} | ≥ ${hZ.z5min} |`)
+    } else {
+      // CN-20 #1: power-only zones (CN-21 #1: Z2 lower = halfUp(56% × ftp))
+      const pZ2l = halfUp(0.56 * ftp)
+      const pZ2u = halfUp(0.75 * ftp)
+      const pZ3u = halfUp(0.90 * ftp)
+      const pZ4u = halfUp(1.05 * ftp)
+      lines.push('| Zone | Power (W) |', '|---|---|',
+        `| Z1 | < ${pZ2l} |`,
+        `| Z2 | ${pZ2l}–${pZ2u} |`,
+        `| Z3 | ${pZ2u + 1}–${pZ3u} |`,
+        `| Z4 | ${pZ3u + 1}–${pZ4u} |`,
+        `| Z5 | ≥ ${pZ4u + 1} |`)
+    }
+    benchSections.push(lines.join('\n'))
   }
 
   const lastHr20raw = bm('run_lasthr20_bpm')
   if (lastHr20raw != null) {
     const rz = deriveRunZones(lastHr20raw)
     const runTTDate = latestBenchmarks['run_lasthr20_bpm']?.date ?? '—'
+    const runLthrNotes = latestBenchmarks['run_lasthr20_bpm']?.notes || null
     const rZ = rz.runHrZones
     const runDist = bm('run_tt_distance_mi')
     benchSections.push([
       `### Run 30-min TT (${runTTDate})`,
       `- Last-20-min avg HR: ${lastHr20raw} bpm${runDist != null ? ` | Distance: ${runDist.toFixed(2)} mi` : ''}`,
-      `- **Run LTHR: ${rz.runLthr} bpm** | **Z2 ceiling: ${rz.runCeiling} bpm**`,
+      `- **Run LTHR: ${rz.runLthr} bpm${runLthrNotes ? ` (${runLthrNotes})` : ''}** | **Z2 ceiling: ${rz.runCeiling} bpm**`,
       '',
       '| Zone | Run HR (bpm) |',
       '|---|---|',
@@ -593,11 +657,16 @@ function generateSnapshot(db, options = {}) {
 
   const swim400mMin = bm('swim_400m_min')
   if (swim400mMin != null) {
-    const sw = deriveSwimPace(swim400mMin)
     const swimTTDate = latestBenchmarks['swim_400m_min']?.date ?? '—'
+    const totalSec = Math.round(swim400mMin * 60)
+    const timeStr = `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2,'0')}`
+    const paceDecMin = swim400mMin / 3.6576
+    const paceMins = Math.floor(paceDecMin)
+    const paceSecs = Math.round((paceDecMin - paceMins) * 60)
+    const paceStr = `${paceMins}:${String(paceSecs).padStart(2,'0')}`
     benchSections.push([
-      `### Swim 400m TT (${swimTTDate})`,
-      `- Time: ${Math.floor(swim400mMin)}:${String(Math.round((swim400mMin % 1) * 60)).padStart(2,'0')} | **Pace per 100m: ${sw.paceFormatted}**`,
+      `### Swim 400 yd TT (${swimTTDate})`,
+      `- Time: ${timeStr} | Distance: 366 m (400 yd, 16 × 25 yd) | **Pace per 100m: ${paceStr}**`,
     ].join('\n'))
   }
 
@@ -616,11 +685,17 @@ function generateSnapshot(db, options = {}) {
     "SELECT distance, duration, date FROM logged_sessions WHERE discipline='run' AND distance IS NOT NULL ORDER BY distance DESC LIMIT 1"
   ).get()
 
-  // Swim continuity progress (CN-10 #5/#7): best unbroken freestyle over last 30 days
+  // Swim continuity progress (CN-10 #5/#7, CN-30 #2): best unbroken freestyle over last 30 days
   // Uses swimUnbrokenBySession (pre-computed above): FIT data or athlete-reported fallback
-  // On-track targets by week number (Wk 1–6 = 200m, 7 = 300, 8 = 400, 9 = 450, 10 = 600, 11 = 750, 12+ = 1000)
-  const SWIM_CONT_TARGETS = [0, 200, 200, 200, 200, 200, 200, 300, 400, 450, 600, 750]
-  const swimContTarget = wkNum <= 11 ? SWIM_CONT_TARGETS[wkNum] : 1000
+  // On-track targets by week (CN-30 #2)
+  const SWIM_CONT_TARGETS = [0, 200, 200, 200, 200, 200, 200, 300, 400, 450, 150, 225, 300, 450, 600, 800]
+  const swimContTarget = wkNum <= 15 ? SWIM_CONT_TARGETS[wkNum] : (wkNum <= 21 ? 1000 : 1500)
+
+  // Gate label: read continuous_1000m week from readiness_gates (CN-30 #2)
+  const _contGate = db.prepare(
+    "SELECT week_num FROM readiness_gates WHERE metric='continuous_1000m' AND plan_id=(SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1) ORDER BY week_num ASC LIMIT 1"
+  ).get()
+  const swimGateLabel = _contGate ? `Week ${_contGate.week_num} gate: 1,000m` : 'Week 16 gate: 1,000m'
 
   // Find the max unbroken over all swim sessions in last 30 days
   let swimContM = null, swimContSource = null
@@ -641,9 +716,9 @@ function generateSnapshot(db, options = {}) {
   if (swimContM != null) {
     const onTrack = swimContM >= swimContTarget ? 'YES' : 'NO'
     const srcNote = swimContSource === 'athlete' ? ' (athlete-reported)' : ''
-    swimContinuityLine = `Swim continuity: ${swimContM}m (best unbroken freestyle${srcNote}, last 30 days) | Week 12 gate: 1,000m | On track: ${onTrack}`
+    swimContinuityLine = `Swim continuity: ${swimContM}m (best unbroken freestyle${srcNote}, last 30 days) | ${swimGateLabel} | On track: ${onTrack}`
   } else {
-    swimContinuityLine = `Swim continuity: UNKNOWN (no length data, last 30 days) | Week 12 gate: 1,000m | On track: UNKNOWN`
+    swimContinuityLine = `Swim continuity: UNKNOWN (no length data, last 30 days) | ${swimGateLabel} | On track: UNKNOWN`
   }
 
   const activityRecords = [
@@ -671,7 +746,7 @@ function generateSnapshot(db, options = {}) {
       const ftpPow = db.prepare("SELECT value FROM athlete_benchmarks WHERE metric='bike_power20_w' AND date>=? AND date<=? ORDER BY date DESC LIMIT 1").get(gateWeekStart, gateWeekEnd)
       const ftpHr  = db.prepare("SELECT value FROM athlete_benchmarks WHERE metric='bike_hr20_bpm' AND date>=? AND date<=? ORDER BY date DESC LIMIT 1").get(gateWeekStart, gateWeekEnd)
       let ftpStr = 'not recorded'
-      if (ftpPow && ftpHr) {
+      if (ftpPow) {
         const ftp = Math.floor(ftpPow.value * 0.95 + 0.5)
         ftpStr = `recorded ${ftp} W`
       }
@@ -680,13 +755,16 @@ function generateSnapshot(db, options = {}) {
       let swimStr = 'not recorded'
       if (swimBm) {
         const totalSec = Math.round(swimBm.value * 60)
-        swimStr = `recorded ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')}`
+        const paceDecMin = swimBm.value / 3.6576
+        const paceMins = Math.floor(paceDecMin)
+        const paceSecs = Math.round((paceDecMin - paceMins) * 60)
+        swimStr = `recorded ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')} (${paceMins}:${String(paceSecs).padStart(2,'0')}/100m)`
       }
       // Run 30-min TT: run_tt_distance_mi in gate week
       const runBm = db.prepare("SELECT value FROM athlete_benchmarks WHERE metric='run_tt_distance_mi' AND date>=? AND date<=? ORDER BY date DESC LIMIT 1").get(gateWeekStart, gateWeekEnd)
       let runStr = 'not recorded'
       if (runBm) runStr = `recorded ${runBm.value.toFixed(2)} mi`
-      return `FTP: ${ftpStr}; 400m swim TT: ${swimStr}; 30-min run TT: ${runStr}`
+      return `FTP: ${ftpStr}; 400 yd swim TT: ${swimStr}; 30-min run TT: ${runStr}`
     }
 
     if (TEST_GATE_METRICS.has(g.metric)) {
@@ -729,7 +807,7 @@ function generateSnapshot(db, options = {}) {
 
   const gateHeader = '| Gate | Week | Status | Evidence |\n|---|---|---|---|'
   const gateRows = gates.map(g =>
-    `| ${g.discipline} ${g.metric} | ${g.week_num} | ${g.status} | ${gateEvidence(g)} |`
+    `| ${g.discipline} ${g.metric} | ${g.week_num} | ${g.status.toUpperCase()} | ${gateEvidence(g)} |`
   ).join('\n')
 
   // ─── Section 7: Next 7 Days ───────────────────────────────────────────────
@@ -825,8 +903,8 @@ function generateSnapshot(db, options = {}) {
     return `| ${r.date} | ${dayType} | ${trainMinStr} | ${kcal} | ${rangeStr} | ${protein} | ${carbs} | ${flags.length > 0 ? flags.join(', ') : '—'} |`
   })
 
-  // CN-5 #4 W1-W3: calendar-window weight trend (weightRowsAll already queried above)
-  const trendResult = computeWeightTrend(weightRowsAll)
+  // CN-5 #4 W1-W3: calendar-window weight trend — restricted to last 30 days (CN-27 #2)
+  const trendResult = computeWeightTrend(weightRowsAll.filter(r => r.date >= since30))
   let weightTrendLine
   if (trendResult) {
     const rateStr = trendResult.lossPerWeek > 0

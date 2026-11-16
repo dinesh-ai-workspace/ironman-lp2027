@@ -144,8 +144,9 @@ function normalizeRow(rawRow, mapping, preset) {
     const rawDistVal = parseNum(rawDistance, false)
     if (rawDistVal !== null && rawDistVal > 0) {
       if (discipline === 'swim') {
-        // Garmin swim distance is in meters; store in miles like every other discipline
-        distanceStored = Math.round(rawDistVal * 0.000621371 * 1e6) / 1e6
+        // Swim distance in metres (or yards if preset says 'yd'); store in miles
+        const distanceM = preset?.distanceUnit === 'yd' ? rawDistVal * 0.9144 : rawDistVal
+        distanceStored = Math.round(distanceM * 0.000621371 * 1e6) / 1e6
       } else if (preset?.distanceUnit === 'mi') {
         distanceStored = Math.round(rawDistVal * 100) / 100
       } else if (preset?.distanceUnit === 'km') {
@@ -173,7 +174,8 @@ function normalizeRow(rawRow, mapping, preset) {
     // Swim-specific fields
     const isOpenWater = rawDiscTrimmed === 'Open Water Swimming'
     const environment  = discipline === 'swim' ? (isOpenWater ? 'open_water' : 'pool') : null
-    const poolLengthM  = discipline === 'swim' && !isOpenWater ? parseNum(rawPoolLength, true) : null
+    let poolLengthM  = discipline === 'swim' && !isOpenWater ? parseNum(rawPoolLength, false) : null
+    if (poolLengthM !== null && preset?.distanceUnit === 'yd') poolLengthM = Math.round(poolLengthM * 0.9144 * 10000) / 10000
 
     const notes = (rawNotes || '') + (durFallback ? ' [dur-fallback]' : '')
 
@@ -216,7 +218,7 @@ function isDuplicate(normalizedRow, existingSessionsForDate) {
 
 function runImportPipeline({ filePath, preset, mappingOverrides = {}, db, dryRun = false }) {
   // CN-10 #2: validate distance unit before processing anything
-  if (preset?.distanceUnit !== undefined && !['km', 'm', 'mi'].includes(preset.distanceUnit)) {
+  if (preset?.distanceUnit !== undefined && !['km', 'm', 'mi', 'yd'].includes(preset.distanceUnit)) {
     const err = `Unknown distance unit '${preset.distanceUnit}' — must be km, m, or mi. Import aborted.`
     return { total: 0, valid: 0, invalid: 0, duplicates: 0, imported: 0, skipped_duplicates: 0, skipped_invalid: 0, batch_id: null, errors: [{ row: 0, reason: err }], sample: [] }
   }

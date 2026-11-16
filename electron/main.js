@@ -193,12 +193,28 @@ function runMigrations() {
   if (bsIdxRows.length === 0) {
     db.prepare('CREATE INDEX idx_bike_streams_session ON bike_streams(logged_session_id)').run()
   }
+  // CN-20 #2: unique constraint on (session, t_utc) enables INSERT OR IGNORE for idempotent merges
+  const bsUniqueRows = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_bike_streams_unique'").all()
+  if (bsUniqueRows.length === 0) {
+    db.prepare('CREATE UNIQUE INDEX idx_bike_streams_unique ON bike_streams(logged_session_id, t_utc)').run()
+  }
   const lsCols3 = db.prepare('PRAGMA table_info(logged_sessions)').all().map(c => c.name)
   if (!lsCols3.includes('avg_power_w'))      db.prepare('ALTER TABLE logged_sessions ADD COLUMN avg_power_w REAL').run()
   if (!lsCols3.includes('best20_power_w'))   db.prepare('ALTER TABLE logged_sessions ADD COLUMN best20_power_w REAL').run()
   if (!lsCols3.includes('best20_hr_bpm'))    db.prepare('ALTER TABLE logged_sessions ADD COLUMN best20_hr_bpm REAL').run()
   if (!lsCols3.includes('best20_start_utc')) db.prepare('ALTER TABLE logged_sessions ADD COLUMN best20_start_utc TEXT').run()
   if (!lsCols3.includes('power_source'))     db.prepare('ALTER TABLE logged_sessions ADD COLUMN power_source TEXT').run()
+  // CN-20 #2: per-file idempotency table
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS import_files (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      sha256           TEXT NOT NULL UNIQUE,
+      path             TEXT NOT NULL,
+      source           TEXT NOT NULL,
+      logged_session_id INTEGER,
+      imported_at      TEXT NOT NULL
+    )
+  `).run()
 }
 
 // ─── First-launch plan initialization ─────────────────────────────────────
@@ -304,7 +320,7 @@ ipcMain.handle('plan:get', () => {
 })
 
 // ─── IPC: plan:regenerate ────────────────────────────────────────────────
-ipcMain.handle('plan:regenerate', () => {
+ipcMain.handle('plan:regenerate', (event) => {
   try {
     db.prepare("UPDATE plans SET status='superseded' WHERE status='active'").run()
     const planStartDate    = new Date('2026-09-14T00:00:00Z')
@@ -312,6 +328,7 @@ ipcMain.handle('plan:regenerate', () => {
     const raceDate         = new Date('2027-07-25T00:00:00Z')
     const generated = generatePlan({ raceDate, planStartDate, athleteBirthDate })
     const { planId, version } = savePlan(db, generated)
+    event.sender.send('heatmap:invalidated')
     return { ok: true, planId, version }
   } catch (err) {
     return { ok: false, error: err.message }
@@ -324,7 +341,9 @@ ipcMain.handle('plan:generate', (event, config) => {
   const planStartDate = new Date(config.planStartDate)
   const athleteBirthDate = new Date(config.athleteBirthDate || '1980-01-15T00:00:00Z')
   const generated = generatePlan({ raceDate, planStartDate, athleteBirthDate })
-  return savePlan(db, generated)
+  const result = savePlan(db, generated)
+  event.sender.send('heatmap:invalidated')
+  return result
 })
 
 // ─── IPC: sessions:planned:list ───────────────────────────────────────────
@@ -432,7 +451,7 @@ ipcMain.handle('sessions:log', (event, session) => {
     avg_cadence: session.avg_cadence ? parseInt(session.avg_cadence) : null,
     environment: session.environment || null,
     wetsuit_used: session.wetsuit_used ? 1 : 0,
-    pool_length_m: session.pool_length_m ? parseInt(session.pool_length_m) : null,
+    pool_length_m: session.pool_length_m ? parseFloat(session.pool_length_m) : null,
     source: session.source || 'manual',
     import_batch_id: session.import_batch_id || null,
     reason: session.reason || null,
@@ -1278,6 +1297,19 @@ ipcMain.handle('stats:heatmap', () => {
   const activePlan = db.prepare("SELECT id FROM plans WHERE status='active' ORDER BY version DESC LIMIT 1").get()
   const planId = activePlan?.id || -1
 
+  // CN-19 #1: load z2 ceilings + zone dates for forward-only intensity check
+  const _heatmapCeilingRows = db.prepare("SELECT metric, value FROM athlete_benchmarks WHERE metric IN ('bike_ceiling_hr','run_ceiling_hr') ORDER BY date DESC").all()
+  const z2CeilingsHeatmap = {}
+  for (const r of _heatmapCeilingRows) {
+    if (r.metric === 'bike_ceiling_hr' && z2CeilingsHeatmap.bike == null) z2CeilingsHeatmap.bike = r.value
+    if (r.metric === 'run_ceiling_hr'  && z2CeilingsHeatmap.run  == null) z2CeilingsHeatmap.run  = r.value
+  }
+  const zonesDatesHeatmap = {}
+  const _runZoneBm  = db.prepare("SELECT MIN(date) as d FROM athlete_benchmarks WHERE metric='run_lasthr20_bpm'").get()
+  const _bikeZoneBm = db.prepare("SELECT MIN(date) as d FROM athlete_benchmarks WHERE metric='bike_power20_w'").get()
+  if (_runZoneBm?.d)  zonesDatesHeatmap.run  = _runZoneBm.d
+  if (_bikeZoneBm?.d) zonesDatesHeatmap.bike = _bikeZoneBm.d
+
   const weeks = []
   for (let wk = 1; wk <= TOTAL_WEEKS; wk++) {
     const wkStart = new Date(PLAN_START)
@@ -1288,11 +1320,11 @@ ipcMain.handle('stats:heatmap', () => {
     const endStr   = wkEnd.toISOString().slice(0, 10)
 
     const plannedRows = db.prepare(
-      'SELECT discipline, target_duration, importance, date FROM planned_sessions WHERE plan_id=? AND date>=? AND date<=?'
+      'SELECT id, discipline, type, target_duration, importance, date, target_intensity_zone FROM planned_sessions WHERE plan_id=? AND date>=? AND date<=?'
     ).all(planId, startStr, endStr)
 
     const loggedRows = db.prepare(
-      'SELECT id, discipline, duration, date FROM logged_sessions WHERE date>=? AND date<=?'
+      'SELECT id, discipline, duration, date, avg_hr, reason FROM logged_sessions WHERE date>=? AND date<=?'
     ).all(startStr, endStr)
 
     const volumeMin = loggedRows.reduce((s, r) => s + (r.duration || 0), 0)
@@ -1300,14 +1332,18 @@ ipcMain.handle('stats:heatmap', () => {
     const isFuture  = wk > currentWeek
     const isCurrent = wk === currentWeek
 
-    const scoreResult = isFuture ? null : computeScoreV2(plannedRows, loggedRows, todayStr)
+    const scoreResult = isFuture ? null : computeScoreV2(plannedRows, loggedRows, todayStr, { z2Ceilings: z2CeilingsHeatmap, zonesDates: zonesDatesHeatmap })
     const score = scoreResult?.score ?? null
+    const grade = scoreResult?.grade ?? null
+    const cap   = scoreResult?.cap  ?? null
 
     weeks.push({
       weekNum: wk, startStr, endStr,
       planned: plannedRows.length,
       logged: loggedRows.length,
       score,
+      grade,
+      cap,
       volumeMin,
       plannedMin,
       isFuture, isCurrent,
@@ -1721,13 +1757,15 @@ ipcMain.handle('import:preview', (event, filePath, presetName) => {
 ipcMain.handle('import:csv', (event, filePath, presetName, mappingOverrides) => {
   const preset = getPresetByName(presetName)
   try {
-    return runImportPipeline({
+    const result = runImportPipeline({
       filePath,
       preset,
       mappingOverrides: mappingOverrides || {},
       db,
       dryRun: false,
     })
+    event.sender.send('heatmap:invalidated')
+    return result
   } catch (err) {
     return { error: err.message }
   }

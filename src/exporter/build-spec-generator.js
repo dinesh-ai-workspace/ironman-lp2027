@@ -1,7 +1,7 @@
 'use strict'
 
 // Derived from latest changelog row — update this when adding changelog rows
-const SPEC_CHANGED_DATE = '2026-10-18'
+const SPEC_CHANGED_DATE = '2026-11-15'
 
 function generateBuildSpec() {
   return `# IM_LP2027 Plan Build Spec
@@ -35,7 +35,7 @@ function generateBuildSpec() {
 | Sat | Long bike (KEY) |
 | Sun | Easy recovery run (optional Wks 1–5, supporting Wks 6–14) |
 
-**Gate tests (KEY, scheduled on Thu/Tue as shown):** Wk 9 Thu swim 40 min time_trial (400m TT — moved from Wk 8 per CN-12 #1); Wk 12 Thu swim 50 min continuous_test (1,000m); Wk 16 Wed bike 60 min ftp_test; Wk 20 Thu swim 70 min continuous_test (1,500m); Wk 24 Thu run 60 min time_trial (30-min TT); Wk 26 Tue swim 80 min continuous_test (2,000m); Wk 34 Tue swim 100 min continuous_test (3,000m); Wk 35 Tue swim 110 min (3,800m attempt).
+**Gate tests (KEY, scheduled on Thu/Tue as shown):** Wk 9 Thu swim 40 min time_trial (400 yd TT — moved from Wk 8 per CN-12 #1); Wk 12 Thu swim 50 min endurance_continuous (300m progress check, CN-30 #3; gate moved to Wk 16); Wk 16 Tue swim 55 min continuous_test (1,000m, CN-30 #4); Wk 16 Wed bike 60 min ftp_test; Wk 20 Thu swim 70 min endurance_continuous (1,200m progress, CN-30 #4); Wk 22 Thu swim 70 min continuous_test (1,500m, CN-30 #4); Wk 24 Thu run 60 min time_trial (30-min TT); Wk 26 Tue swim 80 min continuous_test (2,000m); Wk 34 Tue swim 100 min continuous_test (3,000m); Wk 35 Tue swim 110 min (3,800m attempt).
 
 **Weekly layout — Wks 15–28 (Mon = day 0):**
 
@@ -80,6 +80,9 @@ Tue/Wed/Thu swim + Fri OW swim maintained in all A/B weeks. Fri swim = open-wate
 **Special weeks:**
 - **Week 5** (2026-10-12): Test week. Wed = Z2 indoor bike 60 min (supporting; FTP moved per CN-11 #1). Fri = swim TT 40 min (KEY — K1 exception; moved from Thu per CN-13 #1). Sat = run TT 60 min (KEY); Sun = FTP test 100 min (KEY).
 - **Weeks 6–7** (2026-10-22 → 2026-11-01): Athlete travel. Swims/bikes optional; Wk 6 long run Sat 60 min. Wk 8 Thu swim TT moved to Wk 9 Thu (CN-12 #1).
+- **Week 8** (2026-11-02): gate RED (CN-25 #1); Sun 2026-11-08 run TT moved to 2026-11-15 (CN-25 #2); Sun 2026-11-08 now easy recovery run 30 min (supporting).
+- **Week 9** (2026-11-09): Sun 2026-11-15 run TT retest 60 min (KEY, CN-25 #2) — MISSED; retest moved to 2026-11-17 (CN-28 #2). Thu 2026-11-12 400 yd swim TT; reduced volume per CN-25 #3.
+- **Weeks 10–11** (2026-11-16 → 2026-11-29): long run and long ride reduced for post-travel re-ramp (CN-26 #1–#2). Tue 2026-11-17 run TT retest 60 min (KEY, CN-28 #2).
 - **Week 18** (Sun 2027-01-17): Sprint/Olympic tune-up race. Short swim Monday, shake-out run Friday.
 - **Week 28** (Sat 2027-03-27): Half-Ironman tune-up race (Saturday). Short swim Tuesday, easy run Wednesday, race Saturday. Race target: 450 min.
 - **Week 38** (Sat 2027-06-05): Dress Rehearsal. Swim 100 min → T1 → Bike 300 min → T2 → Run 90 min back-to-back. Full race nutrition and gear.
@@ -106,12 +109,12 @@ Defined in \`src/core/plan-generator/index.js → buildReadinessGates()\`. Inser
 
 | Wk | Discipline | Metric ID | Target |
 |---|---|---|---|
-| 5 | multi | baselines_w5 | GREEN: FTP, 400m swim TT, 30-min run TT all recorded; zones set before Wk 6 |
+| 5 | multi | baselines_w5 | GREEN: FTP, 400 yd swim TT, 30-min run TT all recorded; zones set before Wk 6 |
 | 8 | multi | trajectory_review_w8 | GREEN: Swim pace/100m ≤ Wk 5; all KEY Wks 5–7 ≥85%; no joint pain >3 days |
-| 12 | swim | continuous_1000m | GREEN: 1,000 m non-stop, any pace |
+| 16 | swim | continuous_1000m | GREEN: 1,000 m non-stop, any pace |
 | 16 | bike | ftp_retest_w16 | GREEN: FTP ≥ Wk 5 FTP |
-| 20 | swim | continuous_1500m | GREEN: 1,500 m non-stop, any pace |
-| 24 | run | run_tt_retest_w24 | GREEN: 30-min TT distance ≥ Wk 5 |
+| 22 | swim | continuous_1500m | GREEN: 1,500 m non-stop, any pace |
+| 24 | run | run_tt_retest_w24 | GREEN: 30-min TT distance ≥ Wk 9 retest (2026-11-15) |
 | 26 | multi | half_readiness_w26 | GREEN: 2,000 m swim + 3.5-h ride + 100-min run, same week, different days |
 | 28 | race | him_tune_up_race | GREEN: Finished within cutoffs, even pacing, no GI issues |
 | 34 | swim | ow_continuous_3000m | GREEN: 3,000 m continuous, wetsuit, sighting |
@@ -123,7 +126,7 @@ Defined in \`src/core/plan-generator/index.js → buildReadinessGates()\`. Inser
 **Evidence column rules (CN-10 #6):**
 
 - **Test gates** (baselines_w5, continuous_1000m, ftp_retest_w16, continuous_1500m, run_tt_retest_w24): Evidence lists only logged sessions matched to planned sessions of type \`ftp_test\`, \`time_trial\`, or \`continuous_test\` in the gate week, plus Benchmarks entries for that week. No unplanned or non-test sessions appear.
-  - baselines_w5 format exactly: \`FTP: <recorded N W | not recorded>; 400m swim TT: <recorded mm:ss | not recorded>; 30-min run TT: <recorded X.XX mi | not recorded>\`
+  - baselines_w5 format exactly: \`FTP: <recorded N W | not recorded>; 400 yd swim TT: <recorded mm:ss (pace/100m) | not recorded>; 30-min run TT: <recorded X.XX mi | not recorded>\`
 - **Swim gates** (ow_continuous_3000m): longest single swim in gate week and prior week (m + min).
 - **Multi / race gates** (trajectory_review_w8, half_readiness_w26, him_tune_up_race, im_readiness_w36, dress_rehearsal): relevant logged sessions in gate week range (swim/bike/run, up to 3).
 
@@ -242,7 +245,7 @@ Swim has no overshoot penalty — extra swim time is welcome on the limiter.
 
 **K1 — KEY swim selection:** In every week with ≥1 non-optional swim, the longest non-optional swim is KEY; all others are supporting. Tie → later day in the week is KEY. Exceptions: Wk 5 Fri swim TT is KEY; race weeks 18, 28, 45 and Dress Rehearsal week 38 are unchanged.
 
-**Intensity check (Z2 sessions):** For KEY and supporting bike/run sessions with target zone Z2: if avg HR > (Z2 ceiling HR + 5 bpm), credit = credit × 0.6, flag = "too hard". Activated per discipline as soon as its Z2 ceiling HR exists (set after Week 5 tests). Snapshot shows: "Intensity check: active (run ceiling X bpm, bike ceiling Y bpm)" or "Intensity check: inactive (zones not set)".
+**Intensity check (Z2 sessions):** For KEY and supporting bike/run sessions with target zone Z2: if avg HR > (Z2 ceiling HR + 5 bpm), credit = credit × 0.6, flag = "too hard". Activated per discipline as soon as its Z2 ceiling HR exists (set after Week 5 tests). Snapshot shows: "Intensity check: active (run ceiling X bpm, bike ceiling Y bpm)" or "Intensity check: inactive (zones not set)". Applies only to sessions on/after the date the discipline's zones were set; earlier sessions are flagged \`HR>ceiling (pre-zones)\` without credit change (CN-19 #1).
 
 **Recovery rules (C1–C4):**
 
@@ -316,7 +319,7 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | Duration (all) | **min** | Never write "m" — collides with metres |
 | Run distance | miles | Garmin \`distanceUnit: 'mi'\` |
 | Bike distance | miles | Same |
-| Swim distance | miles | Stored in miles; displayed in metres in snapshot (× 1,609.34) |
+| Swim distance | miles | Stored in miles; displayed in metres in snapshot (× 1,609.34); pool_length_m stored per session; 25 yd = 22.86 m |
 | Run pace | min:ss / mi | duration_min ÷ distance_miles, formatted MM:SS |
 | Swim pace | min:ss / 100 m | convert miles → metres (× 1,609.34), then per 100 m |
 | Bike speed | mph | distance_miles ÷ (duration_min ÷ 60) |
@@ -378,6 +381,37 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 | 2026-10-17 | **CN-16 #1** — Wk 5 baselines rescheduled: FTP to 2026-10-18, run TT to 2026-10-20 (replaces easy run). **VOID (CN-18 #1)** |
 | 2026-10-18 | **CN-18 #1** — Wk 5 tests swapped: run TT done 2026-10-17 (3.58 mi, LTHR 150), FTP 2026-10-18. CN-16 #1 void. |
 | 2026-10-18 | **CN-17 #1** — Keiser M3 TCX import + Garmin HR merge; FTP auto-extracted from 20-min window (lap first, else best rolling). |
+| 2026-10-18 | **CN-19 #1** — Intensity check forward-only: "too hard" applies only on/after the date zones were set; earlier sessions flagged \`HR>ceiling (pre-zones)\` with no credit change. |
+| 2026-10-18 | **CN-19 #2** — Zone bands contiguous: lower = previous upper + 1, Z5 min = Z4 upper + 1 (applies to run HR, bike HR, bike power). |
+| 2026-10-18 | **CN-20 #1** — FTP from Keiser power alone: for ftp_test sessions always compute P (best 20-min rolling window); write FTP benchmark source \`auto: keiser\`. Bike LTHR and HR zones set only when HR stream ≥ 90% covers window; until then flag \`HR incomplete\`. When FIT arrives later, recompute H and upgrade source to \`auto: keiser+garmin\`. Snapshot block shows \`20-min window: start +MM:SS, P = N W\`. |
+| 2026-10-18 | **CN-20 #2** — Idempotency per source file: \`import_files\` table (sha256, path, source, logged_session_id, imported_at); skip file only if sha256 present. New file on existing session merges by \`t_utc\` (Keiser fills power/cadence; Garmin fills HR). UNIQUE constraint on \`(logged_session_id, t_utc)\` in \`bike_streams\`. |
+| 2026-10-18 | **CN-20 #3** — Session Log Note cleanup: empty brackets \`[]\` stripped from notes at import time and at display time. |
+| 2026-10-18 | **CN-21 #1** — Revert unrequested Z2-lower change; define zone boundary rules: Z2 lower = halfUp(Z2 lower % × threshold); Z1 = \`< Z2 lower\`; Z3/Z4 lower = previous upper + 1; Z5 = \`≥ Z4 upper + 1\`. Process rule: unrequested behaviour changes must be listed in the report and must not ship until approved. |
+| 2026-10-18 | **CN-22 #1** — baselines_w5 set GREEN (FTP 162 W, swim 14:48, run 3.58 mi); Wk 16 FTP retest protocol pinned. |
+| 2026-10-18 | **CN-23 #1** — Run LTHR 150 marked provisional; 2026-11-08 run TT retest added (Wk 8, KEY, 60 min); run_tt_retest_w24 gate updated to compare against Wk 8 retest. |
+| 2026-10-19 | **CN-24 #1** — Pool 25 yd (22.86 m): all historical pool swim distances × 0.9144; pool_length_m=22.86 set on all swim sessions ≤ 2026-10-19; swim_lengths.distance_m set to 22.86; athlete-reported unbroken tokens on pool swims ≤ 2026-10-19 corrected × 0.9144 (halfUp). Swim TT renamed to 400 yd TT; pace = T ÷ 3.6576 (16 × 25 yd = 365.76 m); Wk 5 benchmark 14:48 → 4:03/100m. Wk 9 TT target 400→366 m. Importer: distanceUnit 'yd' supported; pool_length_unit 'yd' converted to m; missing pool length flagged pool-length-unknown. Build Spec F/H updated. |
+| 2026-11-03 | **CN-25 #1** — Gate trajectory_review_w8 set RED: two criteria missed (Wk 6–7 KEY compliance + elbow pain >3 days). Status updated in readiness_gates; target text unchanged. |
+| 2026-11-03 | **CN-25 #2** — Run TT retest moved Wk 8 → Wk 9: Sun 2026-11-08 downgraded to easy recovery 30 min supporting Z1; Sun 2026-11-15 upgraded to time_trial KEY 60 min Z4. Gate run_tt_retest_w24 target updated to "Wk 9 retest (2026-11-15)". Benchmark run_lasthr20_bpm note updated to "provisional — retest 2026-11-15". |
+| 2026-11-03 | **CN-25 #3** — Wk 9 reduced to 430 min swim/bike/run (coach-tightened RED action): Tue swim 50→40, Wed bike 75→60, Thu run 95→70, Fri swim 50→40, Sat bike 130→95. Wk 10+ unchanged. |
+| 2026-11-03 | **CN-25 #4** — Elbow protocol: strength rows Wks 9–11 (optional) appended "CN-25 #4: lower body + core only; no gripping/pulling loads (elbow)." No paddles; no scoring changes. |
+| 2026-11-09 | **CN-26 #1** — Wk 10 re-ramp (post-travel): Thu 2026-11-19 long run 100→85 min; Sat 2026-11-21 long ride 135→120 min. Swim unchanged (limiter). |
+| 2026-11-09 | **CN-26 #2** — Wk 11 re-ramp (post-travel): Thu 2026-11-26 long run 100→95 min; Sat 2026-11-28 long ride 145→130 min. All other Wk 11 rows unchanged. |
+| 2026-11-09 | **CN-26 #3** — VOID (CN-26 #4) — CN-25 Build Spec items already present. |
+| 2026-11-09 | **CN-26 #4** — Replaces CN-26 #3: added Weeks 10–11 special-week line to section A; CN-26 changelog rows added. CN-25 Build Spec already up-to-date per 12:33 UTC export. |
+| 2026-11-13 | **CN-27 #1** — Bug fix: Session Log "pending vs missed" now uses A5 result from computeScore (spec D rule A5). Root cause: Session Log renderer was checking p.date < today → missed instead of consulting computeScore pending flags; sessions within the ±2-day grace window on the current week were incorrectly shown as missed. Fix: pendingSet14 populated from computeScore matchDetails flags; renderer checks pendingSet14 before date comparison. |
+| 2026-11-13 | **CN-27 #2** — Bug fix: Weight trend (spec I C3 W1–W2) now restricted to last 30 days of weight readings. Root cause: computeWeightTrend was called with all historical rows (47 rows back to 2026-06-18), finding D_new=2026-10-13 and D_old=2026-09-23 outside the 30-day display window and reporting a stale trend. Fix: weightRowsAll filtered to date >= since30 before passing to computeWeightTrend; with only 4 rows in range, no 7-day window has ≥3 readings → insufficient data. Stop-loss C5 unchanged (already handles null trendResult). |
+| 2026-11-15 | **CN-28 #1** — Bug fix: Heat map week score now reads from computeScore (spec D) via IPC stats:heatmap. Root cause: Calendar.jsx computeWeekCompliance() was a parallel renderer-side scoring engine missing A8 test-session credit (100% when ratio ≥ 0.50), K2 grade caps (swim<75% → C, KEY missed → B), and B1–B4 excused sessions. Fix: main.js stats:heatmap handler already called computeScore correctly; Calendar.jsx week detail badge now uses IPC heatmap data (grade, score, cap). Cache invalidated on import, rescore, and plan edit via heatmap:invalidated IPC event. Colour bands unchanged (3-band: green ≥90, amber ≥70, red <70); spec defines 4 grade letters (A/B/C/D) — no behaviour change to colours. |
+| 2026-11-15 | **CN-28 #2** — Run TT retest moved Wk 9 → Wk 10: Sun 2026-11-15 run TT scored as missed (unchanged in DB). Tue 2026-11-17 downgraded from easy run 25 min Z2 supporting → time_trial KEY 60 min Z4 testing, note "CN-28 #2: run TT retest (moved from 2026-11-15)". Gate run_tt_retest_w24 target updated to "Wk 10 retest (2026-11-17)". Benchmark run_lasthr20_bpm notes updated to "provisional — retest 2026-11-17". Section A Wk 9 special-week line updated; Wks 10–11 line updated. |
+| 2026-11-15 | **CN-28 #3** — Report only: Swim sessions 2026-10-16→2026-11-15: 4 sessions found (id 55: 2026-10-16, 32 lengths × 22.86m pool; id 65: 2026-10-30; id 71: 2026-11-06; id 74: 2026-11-12). Session 55 is day 31 prior to today, outside the 30-day window. FIT import is manual only (no auto-sync from Garmin). No bug; no code change. |
+| 2026-11-15 | **CN-29 #3** — CN-28 unrequested changes approved (7 items): (1) zones.js Z3 lower = Z2 upper + 1 (CN-19 #2 / CN-21 #1); (2) scoring/index.js zonesDates from options, CN-19 #1 forward-only check; (3) snapshot-generator.js zonesDates passed, pendingSet14 (CN-27 #1), power-only zones when HR incomplete (CN-20 #1), 400 yd label (CN-24), gate status uppercase, weight 30-day (CN-27 #2); (4) keiser-tcx.js sha256 idempotency (CN-20 #2), cleanNotes (CN-20 #3), FTP HR recompute (CN-20 #1), FIT+TCX backfill; (5) fit-swim.js pool length null when absent; yd conversion (condition: null pool length → pool-length-unknown flag in Session Log Note, CN-24 #1); (6) pipeline.js distanceUnit 'yd'; float pool length; (7) plan-doc-generator.js gate status uppercase; notes truncation 50→120. |
+| 2026-11-15 | **CN-29 #1** — Bug fix: swim distance now computed as active_lengths × pool_length_m (halfUp) for all swims with FIT length data. Root cause: Garmin CSV exports use 25 m/length for 25 yd pools; CSV importer stored as-is; CN-24 corrected historical sessions but FIT imports did not recompute distance. Fix: on each FIT swim import and on existing swims with length data, distance = halfUp(active_lengths × pool_length_m) × 0.000621371 mi. Applied to all 3 pool swims in DB: id 65 (2026-10-20) 17 active → 389 m; id 71 (2026-11-09) 25 active → 572 m; id 74 (2026-11-15) 28 active → 640 m. Pace recomputed from corrected distance. Build Spec F/H note added. |
+| 2026-11-15 | **CN-29 #2** — Bug fix: swim continuity break detection updated. Root cause: TCX import only inserted active-lap records (no idle records); rule (a) idle-length break could never fire, so the whole session counted as one unbroken run. Break rules clarified (now definitive): (a) idle/rest length record; (b) non-freestyle length; (c) lap boundary (FIT lap message) between two lengths — implemented via idle record inserted between laps; (d) time gap ≥ 10 s between end of one length and start of next. Session Log Note format: \`unbroken: Xm; breaks: N\` (measured) or \`unbroken: Xm (athlete-reported)\` (fallback). Build Spec H Swim Continuity updated. |
+| 2026-11-15 | **CN-29 #4** — Process rule: acceptance tests in Coaching Notes files are run exactly as numbered and worded. No substitution, renumbering, or addition in their place. Tests unreachable from exports reported as NOT RUN (not PASS). Extra checks listed separately under "Additional checks". |
+| 2026-11-15 | **CN-30 #1** — Revert: "Longest swim" restored to all-time max (removed 30-day filter added in CN-29 unrequested change). CN-29 AT1 expectation was coach error; correct all-time max is 663 m (43 min) on 2026-09-08. |
+| 2026-11-15 | **CN-30 #2** — Swim continuity on-track targets updated (CN-30 #2 table): Wks 1–9 unchanged; Wks 10–15 reset to 150/225/300/450/600/800 m; Wks 16–21 → 1,000 m; Wk 22+ → 1,500 m. Snapshot gate label "Week N gate: 1,000m" now reads gate week from \`readiness_gates\` (not hard-coded). Build Spec H updated. |
+| 2026-11-15 | **CN-30 #3** — Plan ID 10 in place: Thu swims Wks 10–15 updated. Wk 10 (2026-11-19) target_distance_m 600→150 (7 lengths). Wk 11 (2026-11-26) 750→225 (10 lengths). Wk 12 (2026-12-03) continuous_test→endurance_continuous, target 1000→300 (14 lengths), still KEY; note adds "Wk 12 progress check (gate moved to Wk 16, CN-30 #4)". Wk 13 (2026-12-10) aerobic_intervals 25→endurance_continuous 30, target 450 (20 lengths), supporting. Wk 14 (2026-12-17) aerobic_intervals 30→endurance_continuous 35, target 600 (27 lengths), supporting. Wk 15 (2026-12-24) aerobic_intervals 30→endurance_continuous 40, target 800 (35 lengths), supporting. K1 unchanged for Wks 10–11 (Fri stays KEY). Wk 12 stays Thu KEY. Wks 13–15 Thu stays supporting (Fri 50 min > Thu). |
+| 2026-11-15 | **CN-30 #4** — Swim gate moves. 1,000m gate: Wk 12→16 in readiness_gates; Wk 16 Tue 2026-12-29 aerobic_intervals 30 supporting → continuous_test 55 min KEY target 1,000m; Wk 16 Fri 2027-01-01 KEY→supporting (K1). 1,500m gate: Wk 20→22 in readiness_gates; Wk 20 Thu 2027-01-28 continuous_test→endurance_continuous target 1,200m (stays KEY); Wk 22 Thu 2027-02-11 aerobic_intervals 35 supporting → continuous_test 70 min KEY target 1,500m; Wk 22 Fri 2027-02-12 KEY→supporting (K1). Validation: Wk 22 total 715 min = 11.9 h ≤ 14 h ✓; Wk 22 vs Wk 21 (690 min): +3.6% ≤ 10% ✓. Build Spec A gate-tests and C gates table updated. |
+| 2026-11-15 | **CN-30 #5** — Record only: CN-29 AT1 expectation was coach error (ignored 2026-09-08 swim); corrected by CN-30 #1. CN-29 AT8 expected 200m was wrong; 183m (8 × 22.86m) is correct (athlete-reported 200m was pre-CN-24 value, ×0.9144 → 183m); CN-29 AT8 treated as PASS. |
 
 ---
 
@@ -387,7 +421,16 @@ A3. If any of Activities, Sleep/wellness, or Nutrition is stale, add a sixth lin
 
 **Rounding:** all derived values use half-up: \`halfUp(n) = Math.floor(n + 0.5)\`
 
+**Zone band rules (CN-19 #2, clarified CN-21 #1):**
+1. Z2 lower = \`halfUp(Z2_lower_% × threshold)\`.
+2. Z1 = \`< Z2 lower\` (unbounded below).
+3. Z2, Z3, Z4 upper = \`halfUp(upper_% × threshold)\`. Z3 lower = Z2 upper + 1; Z4 lower = Z3 upper + 1.
+4. Z5 = \`≥ Z4 upper + 1\`.
+5. Applies to run HR, bike HR, and bike power zones.
+
 ### Bike FTP Test
+
+FTP from Keiser power alone; LTHR added when HR stream arrives (CN-20 #1).
 
 Input: 20-min avg power (W) = P, 20-min avg HR (bpm) = H
 
@@ -436,29 +479,37 @@ Input: avg HR of the last 20 min (bpm) = R
 | Z4 | 95–99% |
 | Z5 | ≥ 100% |
 
-### Swim 400m TT
+### Swim 400 yd TT
 
 Input: time in mm:ss = T (converted to decimal minutes)
 
-**Pace per 100m** = T ÷ 4. Record only; no swim zones.
+**Pace per 100m** = T ÷ (TT distance m ÷ 100); standard TT = 16 × 25 yd = 365.76 m. Record only; no swim zones.
 
 ### Swim Continuity (CN-10 #5 / CN-10 #7)
 
-**Definition.** Best unbroken freestyle = the longest run of consecutive active freestyle lengths with no idle length in between, taken from the Garmin length/lap records (\`swim_lengths\` table: logged_session_id, length_index, length_type, stroke, distance_m, duration_s). Use the pool length from \`logged_sessions.pool_length_m\`. Rest intervals (idle lengths) and non-freestyle lengths break the run.
+**Definition.** Best unbroken freestyle = the longest run of consecutive active freestyle lengths without a break, taken from the Garmin length/lap records (\`swim_lengths\` table: logged_session_id, length_index, length_type, stroke, distance_m, duration_s, start_time). Use the pool length from \`logged_sessions.pool_length_m\`.
+
+**Break rules (CN-29 #2, effective 2026-11-15):** A run of consecutive active freestyle lengths is broken by ANY of:
+- (a) an idle/rest length record (\`length_type = 'idle'\`);
+- (b) a non-freestyle length (\`stroke\` not null and not containing 'free');
+- (c) a lap boundary (FIT lap message between two lengths) — recorded as an idle record between laps;
+- (d) a time gap ≥ 10 s between the end of one length (\`start_time + duration_s\`) and the start of the next.
 
 **Data sources (CN-10 #7):**
 1. **Measured (FIT):** \`swim_lengths\` rows imported via \`src/importer/fit-swim.js\` from Garmin FIT files. Takes priority over athlete-reported.
 2. **Athlete-reported (fallback):** if a swim session has no \`swim_lengths\` rows but its \`logged_sessions.notes\` contains the token \`unbroken: Xm\` (case-insensitive, integer metres), that value is used. Display appends \` (athlete-reported)\` to the source description.
-3. **Session Log Note** appends \`unbroken: Xm\` (measured) or \`unbroken: Xm (athlete-reported)\` for swim sessions that have a value. Swims with no data get no appended token.
+3. **Session Log Note** appends \`unbroken: Xm; breaks: N\` (measured) or \`unbroken: Xm (athlete-reported)\` (fallback) for swim sessions that have a value. Swims with no data get no appended token.
 4. **Swims with no FIT file:** listed by date in the CN-10 #7 report so the athlete can download originals from Garmin Connect.
+
+**Last changed:** 2026-11-15
 
 **Display rules (snapshot Benchmarks line):**
 
-1. If the best unbroken metres over the last 30 days is available (FIT or athlete-reported): \`Swim continuity: Xm (best unbroken freestyle [source], last 30 days) | Week 12 gate: 1,000m | On track: YES/NO\`
-2. If no source exists for any swim in the last 30 days: \`Swim continuity: UNKNOWN (no length data, last 30 days) | Week 12 gate: 1,000m | On track: UNKNOWN\`
+1. If the best unbroken metres over the last 30 days is available (FIT or athlete-reported): \`Swim continuity: Xm (best unbroken freestyle [source], last 30 days) | Week N gate: 1,000m | On track: YES/NO\` (gate week N read from \`readiness_gates\` metric \`continuous_1000m\`, CN-30 #2)
+2. If no source exists for any swim in the last 30 days: \`Swim continuity: UNKNOWN (no length data, last 30 days) | Week N gate: 1,000m | On track: UNKNOWN\`
 3. On track = YES if best unbroken metres ≥ the continuity target for the current plan week, otherwise NO.
 
-**On-track targets by week:**
+**On-track targets by week (CN-30 #2):**
 
 | Weeks | Target (m) |
 |---|---|
@@ -466,9 +517,14 @@ Input: time in mm:ss = T (converted to decimal minutes)
 | 7 | 300 |
 | 8 | 400 |
 | 9 | 450 |
-| 10 | 600 |
-| 11 | 750 |
-| 12+ | 1,000 |
+| 10 | 150 |
+| 11 | 225 |
+| 12 | 300 |
+| 13 | 450 |
+| 14 | 600 |
+| 15 | 800 |
+| 16–21 | 1,000 |
+| 22+ | 1,500 |
 
 ---
 

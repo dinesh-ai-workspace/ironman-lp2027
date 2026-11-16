@@ -438,11 +438,27 @@ export default function Calendar() {
     return { date: d, dateStr, planned, done, isToday }
   })
 
+  useEffect(() => {
+    if (noAPI || !window.electronAPI.onHeatmapInvalidated) return
+    const unsub = window.electronAPI.onHeatmapInvalidated(() => {
+      window.electronAPI.getHeatmap().then(data => { if (data) setHeatmap(data) })
+    })
+    return () => unsub?.()
+  }, [])
+
   const todayISO = toISO(today)
   // Use ET date from main.js (via heatmap) so scoring cutoff matches the heatmap exactly.
   // Renderer uses UTC (toISO), main.js uses ET — they diverge in the ~4h window near midnight ET.
   const scoringTodayStr = heatmap?.todayStr ?? todayISO
   const compliance = computeWeekCompliance(days, scoringTodayStr)
+
+  // CN-28 #1: use IPC-computed score (computeScore) for the week detail badge
+  // to avoid duplicate scoring logic and guarantee A8/K2/B1-B4 rules are applied.
+  const selectedWkData = heatmap?.weeks?.find(w => w.weekNum === selectedWeekNum)
+  const displayScore = selectedWkData?.score ?? null
+  const displayGrade = selectedWkData?.grade ?? null
+  const displayCap   = selectedWkData?.cap   ?? null
+  const displayColor = displayScore !== null ? gradeColor(displayScore) : 'var(--text-muted)'
 
   return (
     <div>
@@ -517,22 +533,27 @@ export default function Calendar() {
                     Week Compliance{compliance.hasPending ? ' (so far)' : ''}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
-                    <div style={{ fontSize: '32px', fontWeight: 800, color: compliance.color, lineHeight: 1 }}>
-                      {compliance.score !== null ? `${compliance.score}%` : '—'}
+                    <div style={{ fontSize: '32px', fontWeight: 800, color: displayColor, lineHeight: 1 }}>
+                      {displayScore !== null ? `${displayScore}%` : '—'}
                     </div>
-                    {compliance.grade && (
+                    {displayGrade && (
                       <div style={{
-                        fontSize: '24px', fontWeight: 900, color: compliance.color,
-                        background: `${compliance.color}22`, borderRadius: '6px',
+                        fontSize: '24px', fontWeight: 900, color: displayColor,
+                        background: `${displayColor}22`, borderRadius: '6px',
                         padding: '0 8px', lineHeight: '1.4',
                       }}>
-                        {compliance.grade}
+                        {displayGrade}
                       </div>
                     )}
                   </div>
-                  {compliance.hasPending && compliance.score !== null && (
+                  {compliance.hasPending && displayScore !== null && (
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                       {compliance.pendingPts} pts still available
+                    </div>
+                  )}
+                  {displayCap && displayCap !== '—' && (
+                    <div style={{ fontSize: '11px', color: 'var(--accent-amber)', marginTop: '2px' }}>
+                      cap: {displayCap}
                     </div>
                   )}
                 </div>
